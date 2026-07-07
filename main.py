@@ -1,5 +1,8 @@
+from knowledge_viewer.viewer import KnowledgeViewer
+
+
 def main() -> None:
-    print("Suraj Research Engine")
+    KnowledgeViewer().run()
 
 
 if __name__ == "__main__":
