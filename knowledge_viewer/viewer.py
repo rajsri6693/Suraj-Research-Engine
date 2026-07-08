@@ -62,13 +62,15 @@ class KnowledgeViewer:
 
         print("\nCompany Found")
         print("-------------")
-        print(f"Company Name: {company['name']}")
-        print(f"Sector:       {company['sector'] or 'Unknown'}")
+        print(f"Legal Name:   {company['legal_name']}")
+        print(f"Common Name:  {company['common_name'] or 'Unknown'}")
+        print(f"Sector:       {company['sector_name'] or 'Unknown'}")
         print(f"Industry:     {company['industry'] or 'Unknown'}")
-        print(f"Market Cap:   {company['market_cap'] or 'Unknown'}")
-        print(f"Country:      {company['country'] or 'Unknown'}")
-        print(f"Exchange:     {company['exchange'] or 'Unknown'}")
-        print(f"Last Updated: {company['last_updated']}")
+        print(f"Country:      {company['incorporation_country'] or 'Unknown'}")
+        print(f"Headquarters: {company['headquarters_location'] or 'Unknown'}")
+        print(f"Exchanges:    {company['stock_exchanges'] or 'Unknown'}")
+        print(f"Tickers:      {company['ticker_symbols'] or 'Unknown'}")
+        print(f"Last Updated: {company['last_updated'] or 'Unknown'}")
 
     def _show_statistics(self) -> None:
         stats = self.db_manager.get_statistics()

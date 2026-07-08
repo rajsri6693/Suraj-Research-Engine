@@ -175,6 +175,69 @@ prospects and are a distinct category of fact from company-reported news.
 
 **Mandatory or Optional:** Optional.
 
+## Market Data
+
+**Purpose:** Hold point-in-time market trading snapshots for the company.
+
+**What belongs here:** Current price, day range, 52-week range, traded
+volume, market capitalization, and the timestamp the snapshot was taken.
+
+**Why it exists:** Live quantitative market data is sourced from market
+feeds rather than research and reporting, and changes on a much faster
+cadence than the rest of the knowledge record; it is kept distinct from
+Market News (qualitative, event-driven) and Financial Information
+(periodic, reported figures) for that reason.
+
+**Mandatory or Optional:** Optional. Present when a market data feed has
+been connected for the company; absent otherwise.
+
+## Historical Price (OHLC)
+
+**Purpose:** Preserve the company's time-series trading history.
+
+**What belongs here:** One record per trading period — open, high, low,
+close, volume, and the date or interval the record covers.
+
+**Why it exists:** This is the time-series backbone that price-trend and
+technical analysis are computed from. Without it, no historical price
+comparison or derived indicator is possible.
+
+**Mandatory or Optional:** Optional. Present when historical price data
+has been sourced and verified for the company.
+
+## Technical Analysis
+
+**Purpose:** Hold computed technical indicators derived from historical
+price data.
+
+**What belongs here:** Individual indicator values — moving averages,
+RSI, MACD, trend signals, support/resistance levels — each tied to the
+date it was computed for and the Historical Price (OHLC) window it was
+derived from.
+
+**Why it exists:** Keeps computed, derived signals distinct from the raw
+price data they are calculated from, so the underlying prices remain the
+single point of truth and indicators can be recomputed or extended
+without touching stored facts.
+
+**Mandatory or Optional:** Optional. Depends on Historical Price (OHLC)
+being present for the company; absent otherwise.
+
+## Corporate Actions
+
+**Purpose:** Track events that affect share price, share count, or
+shareholder entitlements.
+
+**What belongs here:** Dividends, stock splits, bonus issues, buybacks,
+and mergers, each with an action type, announcement date, effective date,
+and terms.
+
+**Why it exists:** These events require adjustments to historical price
+and market data and are a distinct category of fact from Orders &
+Contracts (business dealings) and Shareholding (ownership breakdown).
+
+**Mandatory or Optional:** Optional.
+
 ## Sources
 
 **Purpose:** Record where every fact came from.
@@ -221,6 +284,10 @@ company's knowledge record is, independent of the content of that record.
 | Market News           | Optional               |
 | Sector Information    | Optional               |
 | Government Policies   | Optional               |
+| Market Data           | Optional               |
+| Historical Price (OHLC) | Optional             |
+| Technical Analysis    | Optional               |
+| Corporate Actions     | Optional               |
 | Sources               | Mandatory              |
 | Metadata              | Mandatory              |
 
@@ -231,6 +298,10 @@ company's knowledge record is, independent of the content of that record.
 - This document defines the logical knowledge model only. It does not
   define database schema, table structure, or storage format — see
   `DATABASE.md` for storage responsibilities.
+- See `DATABASE_ARCHITECTURE.md` for how these sections map onto database
+  layers and entities, including Market Data, Historical Price (OHLC),
+  Technical Analysis, and Corporate Actions, which correspond to that
+  document's Layer 6 — Market & Technical Data.
 - New sections may be added in future phases as research scope expands.
   Any new section must follow the same structure: Purpose, What data
   belongs there, Why it exists, Mandatory or Optional.

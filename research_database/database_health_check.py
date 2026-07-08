@@ -7,7 +7,7 @@ Verifies database connectivity, schema presence, and file size.
 import os
 
 from research_database.database_connection import DatabaseConnection
-from research_database.database_initializer import SCHEMA_MODULES
+from research_database.database_initializer import DatabaseInitializer
 
 
 class DatabaseHealthCheck:
@@ -29,7 +29,7 @@ class DatabaseHealthCheck:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
             existing_tables = {row["name"] for row in cursor.fetchall()}
-            required_tables = {module.TABLE_NAME for module in SCHEMA_MODULES}
+            required_tables = set(DatabaseInitializer(self.connection).tables())
             schema_loaded = required_tables.issubset(existing_tables)
         except Exception:
             connected = False

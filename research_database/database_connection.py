@@ -9,7 +9,7 @@ import os
 import sqlite3
 
 DEFAULT_DB_PATH = os.path.join(
-    os.path.dirname(__file__), "data", "knowledge.db"
+    os.path.dirname(__file__), "data", "verified_knowledge.db"
 )
 
 

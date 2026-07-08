@@ -4,6 +4,8 @@ Database Manager
 Single entry point for all database operations used by the Knowledge Viewer.
 """
 
+import json
+
 from research_database.database_connection import DatabaseConnection
 from research_database.database_health_check import DatabaseHealthCheck
 from research_database.database_initializer import DatabaseInitializer
@@ -35,27 +37,40 @@ class DatabaseManager:
         self.connection.close()
 
     def search_company(self, name: str) -> dict | None:
-        """Search for a company by (case-insensitive, partial) name."""
+        """Search for a company by (case-insensitive, partial) legal or
+        common name."""
         db = self.connection.open()
         cursor = db.execute(
-            "SELECT id, name, sector, industry, market_cap, country, exchange, "
-            "last_updated FROM companies WHERE name LIKE ? ORDER BY name LIMIT 1",
-            (f"%{name}%",),
+            "SELECT company.legal_name, company.common_name, company.industry, "
+            "company.incorporation_country, company.headquarters_location, "
+            "company.stock_exchanges, company.ticker_symbols, "
+            "sector.name AS sector_name, metadata.last_updated_at AS last_updated "
+            "FROM company "
+            "LEFT JOIN sector ON sector.id = company.sector_id "
+            "LEFT JOIN metadata ON metadata.company_id = company.id "
+            "WHERE company.legal_name LIKE ? OR company.common_name LIKE ? "
+            "ORDER BY company.common_name LIMIT 1",
+            (f"%{name}%", f"%{name}%"),
         )
         row = cursor.fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+
+        result = dict(row)
+        result["stock_exchanges"] = ", ".join(json.loads(result["stock_exchanges"] or "[]"))
+        result["ticker_symbols"] = ", ".join(json.loads(result["ticker_symbols"] or "[]"))
+        return result
 
     def get_statistics(self) -> dict:
         """Return database statistics for the viewer's Statistics screen."""
         db = self.connection.open()
 
         total_companies = db.execute(
-            "SELECT COUNT(*) AS count FROM companies"
+            "SELECT COUNT(*) AS count FROM company"
         ).fetchone()["count"]
 
         total_sectors = db.execute(
-            "SELECT COUNT(DISTINCT sector) AS count FROM companies "
-            "WHERE sector IS NOT NULL AND sector != ''"
+            "SELECT COUNT(*) AS count FROM sector"
         ).fetchone()["count"]
 
         version_row = db.execute(
