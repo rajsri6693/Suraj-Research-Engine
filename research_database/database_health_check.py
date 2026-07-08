@@ -6,15 +6,15 @@ Verifies database connectivity, schema presence, and file size.
 
 import os
 
-from research_database.database_connection import DatabaseConnection
 from research_database.database_initializer import DatabaseInitializer
+from research_database.database_manager import DatabaseManager
 
 
 class DatabaseHealthCheck:
     """Verifies database integrity and health."""
 
-    def __init__(self, connection: DatabaseConnection) -> None:
-        self.connection = connection
+    def __init__(self, manager: DatabaseManager) -> None:
+        self.manager = manager
 
     def run_check(self) -> dict:
         """Run integrity checks and return a health report."""
@@ -22,19 +22,19 @@ class DatabaseHealthCheck:
         schema_loaded = False
 
         try:
-            db = self.connection.open()
+            self.manager.connect()
             connected = True
 
-            cursor = db.execute(
+            rows = self.manager.fetch_all(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
-            existing_tables = {row["name"] for row in cursor.fetchall()}
-            required_tables = set(DatabaseInitializer(self.connection).tables())
+            existing_tables = {row["name"] for row in rows}
+            required_tables = set(DatabaseInitializer(self.manager).tables())
             schema_loaded = required_tables.issubset(existing_tables)
         except Exception:
             connected = False
 
-        db_path = self.connection.db_path
+        db_path = self.manager.connection.db_path
         file_size_bytes = os.path.getsize(db_path) if os.path.exists(db_path) else 0
 
         return {

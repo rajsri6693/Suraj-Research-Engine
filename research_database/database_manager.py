@@ -1,89 +1,100 @@
 """
 Database Manager
 
-Single entry point for all database operations used by the Knowledge Viewer.
+The single gateway between the application and SQLite. Owns the
+connection lifecycle, transaction handling, and the generic execute and
+query primitives that higher-level modules are built on. Contains no
+entity-specific logic — CRUD for individual entities (Company, Sector,
+Market News, etc.) belongs to future modules built on top of this one.
 """
 
-import json
+import sqlite3
 
 from research_database.database_connection import DatabaseConnection
-from research_database.database_health_check import DatabaseHealthCheck
-from research_database.database_initializer import DatabaseInitializer
-from research_database.sample_data_seeder import SampleDataSeeder
+
+
+class DatabaseError(Exception):
+    """Raised when a database operation fails."""
 
 
 class DatabaseManager:
-    """Coordinates connection, initialization, and queries for the database."""
+    """Sole gateway to SQLite: connection lifecycle, transactions, and
+    generic execute/query helpers."""
 
     def __init__(self, db_path: str | None = None) -> None:
         self.connection = (
             DatabaseConnection(db_path) if db_path else DatabaseConnection()
         )
-        self.initializer = DatabaseInitializer(self.connection)
-        self.health_checker = DatabaseHealthCheck(self.connection)
-        self.seeder = SampleDataSeeder(self.connection)
 
     def connect(self) -> None:
-        """Establish the database connection."""
+        """Open the database connection."""
         self.connection.open()
-
-    def initialize(self) -> None:
-        """Initialize database structures (create tables if missing) and seed sample data."""
-        self.initializer.initialize()
-        self.seeder.seed()
 
     def close(self) -> None:
         """Close the database connection."""
         self.connection.close()
 
-    def search_company(self, name: str) -> dict | None:
-        """Search for a company by (case-insensitive, partial) legal or
-        common name."""
+    def execute(self, sql: str, params: tuple | dict = ()) -> sqlite3.Cursor:
+        """Run a single statement (DDL, insert, update, delete, or
+        select) and return its cursor."""
         db = self.connection.open()
-        cursor = db.execute(
-            "SELECT company.legal_name, company.common_name, company.industry, "
-            "company.incorporation_country, company.headquarters_location, "
-            "company.stock_exchanges, company.ticker_symbols, "
-            "sector.name AS sector_name, metadata.last_updated_at AS last_updated "
-            "FROM company "
-            "LEFT JOIN sector ON sector.id = company.sector_id "
-            "LEFT JOIN metadata ON metadata.company_id = company.id "
-            "WHERE company.legal_name LIKE ? OR company.common_name LIKE ? "
-            "ORDER BY company.common_name LIMIT 1",
-            (f"%{name}%", f"%{name}%"),
-        )
+        try:
+            return db.execute(sql, params)
+        except sqlite3.Error as error:
+            raise DatabaseError(str(error)) from error
+
+    def execute_many(self, sql: str, params_list) -> sqlite3.Cursor:
+        """Run the same statement against a sequence of parameter sets."""
+        db = self.connection.open()
+        try:
+            return db.executemany(sql, params_list)
+        except sqlite3.Error as error:
+            raise DatabaseError(str(error)) from error
+
+    def fetch_one(self, sql: str, params: tuple | dict = ()) -> dict | None:
+        """Run a query and return the first row as a plain dict, or None."""
+        cursor = self.execute(sql, params)
         row = cursor.fetchone()
-        if row is None:
-            return None
+        return dict(row) if row is not None else None
 
-        result = dict(row)
-        result["stock_exchanges"] = ", ".join(json.loads(result["stock_exchanges"] or "[]"))
-        result["ticker_symbols"] = ", ".join(json.loads(result["ticker_symbols"] or "[]"))
-        return result
+    def fetch_all(self, sql: str, params: tuple | dict = ()) -> list[dict]:
+        """Run a query and return every row as a list of plain dicts."""
+        cursor = self.execute(sql, params)
+        return [dict(row) for row in cursor.fetchall()]
 
-    def get_statistics(self) -> dict:
-        """Return database statistics for the viewer's Statistics screen."""
-        db = self.connection.open()
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        try:
+            self.connection.connection.commit()
+        except sqlite3.Error as error:
+            raise DatabaseError(str(error)) from error
 
-        total_companies = db.execute(
-            "SELECT COUNT(*) AS count FROM company"
-        ).fetchone()["count"]
+    def rollback(self) -> None:
+        """Roll back the current transaction."""
+        try:
+            self.connection.connection.rollback()
+        except sqlite3.Error as error:
+            raise DatabaseError(str(error)) from error
 
-        total_sectors = db.execute(
-            "SELECT COUNT(*) AS count FROM sector"
-        ).fetchone()["count"]
+    def transaction(self) -> "_Transaction":
+        """Return a context manager that commits on success and rolls
+        back if an exception is raised inside it."""
+        return _Transaction(self)
 
-        version_row = db.execute(
-            "SELECT version FROM schema_version WHERE id = 1"
-        ).fetchone()
-        database_version = version_row["version"] if version_row else "unknown"
 
-        return {
-            "total_companies": total_companies,
-            "total_sectors": total_sectors,
-            "database_version": database_version,
-        }
+class _Transaction:
+    """Context manager implementing commit-on-success, rollback-on-error."""
 
-    def health_check(self) -> dict:
-        """Run and return the database health report."""
-        return self.health_checker.run_check()
+    def __init__(self, manager: DatabaseManager) -> None:
+        self.manager = manager
+
+    def __enter__(self) -> DatabaseManager:
+        self.manager.connect()
+        return self.manager
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        if exc_type is None:
+            self.manager.commit()
+        else:
+            self.manager.rollback()
+        return False

@@ -9,7 +9,7 @@ automatically from its dataclass fields.
 import dataclasses
 from typing import get_origin
 
-from research_database.database_connection import DatabaseConnection
+from research_database.database_manager import DatabaseManager
 from research_database.schema import (
     company,
     competitors,
@@ -106,34 +106,32 @@ def _create_table_sql(module) -> str:
 class DatabaseInitializer:
     """Initializes the database file and creates every entity table."""
 
-    def __init__(self, connection: DatabaseConnection) -> None:
-        self.connection = connection
+    def __init__(self, manager: DatabaseManager) -> None:
+        self.manager = manager
 
     def initialize(self) -> None:
         """Create every entity table if it does not already exist."""
-        db = self.connection.open()
-
         for schema_module in SCHEMA_MODULES:
-            db.execute(_create_table_sql(schema_module))
+            self.manager.execute(_create_table_sql(schema_module))
 
-        db.execute(CREATE_SCHEMA_VERSION_TABLE_SQL)
-        db.execute(
+        self.manager.execute(CREATE_SCHEMA_VERSION_TABLE_SQL)
+        self.manager.execute(
             "INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, ?)",
             (SCHEMA_VERSION,),
         )
-        db.commit()
+        self.manager.commit()
 
     def tables(self) -> list[str]:
         """Return the list of table names this initializer is responsible for."""
         return [_table_name(module) for module in SCHEMA_MODULES]
 
 
-def initialize_database(db_path: str | None = None) -> DatabaseConnection:
+def initialize_database(db_path: str | None = None) -> DatabaseManager:
     """Open the database connection and ensure the database and its
     tables exist. Creates the database file and every entity table on
     first startup; safe to call on every subsequent startup, since table
     creation is idempotent.
     """
-    connection = DatabaseConnection(db_path) if db_path else DatabaseConnection()
-    DatabaseInitializer(connection).initialize()
-    return connection
+    manager = DatabaseManager(db_path) if db_path else DatabaseManager()
+    DatabaseInitializer(manager).initialize()
+    return manager

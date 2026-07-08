@@ -9,7 +9,7 @@ ingestion path.
 import json
 from datetime import datetime, timezone
 
-from research_database.database_connection import DatabaseConnection
+from research_database.database_manager import DatabaseManager
 
 SAMPLE_SECTORS = [
     "Defense & Aerospace",
@@ -54,27 +54,26 @@ class SampleDataSeeder:
     """Seeds the company table (and its required Sector/Metadata records)
     with sample records for viewer testing."""
 
-    def __init__(self, connection: DatabaseConnection) -> None:
-        self.connection = connection
+    def __init__(self, manager: DatabaseManager) -> None:
+        self.manager = manager
 
     def seed(self) -> None:
         """Insert sample sector, company, and metadata records if the
         company table is empty."""
-        db = self.connection.open()
-        count = db.execute("SELECT COUNT(*) AS count FROM company").fetchone()["count"]
+        count_row = self.manager.fetch_one("SELECT COUNT(*) AS count FROM company")
 
-        if count > 0:
+        if count_row["count"] > 0:
             return
 
-        sector_ids = self._seed_sectors(db)
-        self._seed_companies(db, sector_ids)
+        sector_ids = self._seed_sectors()
+        self._seed_companies(sector_ids)
 
-        db.commit()
+        self.manager.commit()
 
-    def _seed_sectors(self, db) -> dict:
+    def _seed_sectors(self) -> dict:
         sector_ids = {}
         for sector_name in SAMPLE_SECTORS:
-            cursor = db.execute(
+            cursor = self.manager.execute(
                 "INSERT INTO sector "
                 "(name, size, growth_trend, dynamics_summary, regulatory_environment, "
                 "benchmark_summary) VALUES (?, '', '', '', '', '')",
@@ -83,11 +82,11 @@ class SampleDataSeeder:
             sector_ids[sector_name] = cursor.lastrowid
         return sector_ids
 
-    def _seed_companies(self, db, sector_ids: dict) -> None:
+    def _seed_companies(self, sector_ids: dict) -> None:
         now = datetime.now(timezone.utc).isoformat()
 
         for company in SAMPLE_COMPANIES:
-            cursor = db.execute(
+            cursor = self.manager.execute(
                 "INSERT INTO company ("
                 "legal_name, common_name, registration_details, incorporation_country, "
                 "headquarters_location, founding_date, website, stock_exchanges, "
@@ -107,7 +106,7 @@ class SampleDataSeeder:
             )
             company_id = cursor.lastrowid
 
-            db.execute(
+            self.manager.execute(
                 "INSERT INTO metadata ("
                 "company_id, created_at, last_verified_at, last_updated_at, "
                 "verification_status, revision_number, section_completeness"
