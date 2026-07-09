@@ -45,9 +45,26 @@ class OHLCRecord:
 
 
 @dataclass
+class ChartDataset:
+    """A chart-ready price series, derived from this result's own OHLC
+    Records, per IMP-09D. labels holds one date string per record, in
+    the same order as the value lists -- a plain, library-agnostic
+    shape any charting consumer can plot without this collector ever
+    rendering an image itself."""
+
+    labels: List[str]
+    open_values: List[float]
+    high_values: List[float]
+    low_values: List[float]
+    close_values: List[float]
+    volume_values: List[int]
+
+
+@dataclass
 class HistoricalPriceResult:
     """The Historical Price (OHLC) Collector's Collected Data for one
-    company, per IMP-08G's field list."""
+    company, per IMP-08G's field list, extended with Chart Dataset per
+    IMP-09D."""
 
     symbol: str
     exchange: str
@@ -57,6 +74,7 @@ class HistoricalPriceResult:
     ohlc_records: List[OHLCRecord]
     total_trading_days: int
     adjusted_prices: bool
+    chart_dataset: ChartDataset
     sources: List[str]
     collection_time: datetime
     collector_status: CollectorStatus

@@ -25,7 +25,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..base_collector import BaseCollector
-from .technical_analysis_result import CollectorStatus, TechnicalAnalysisResult
+from .technical_analysis_result import (
+    CollectorStatus,
+    TechnicalAnalysisResult,
+    TechnicalChartData,
+)
 
 
 class InvalidResearchTopicError(Exception):
@@ -56,13 +60,18 @@ class TechnicalAnalysisCollector(BaseCollector):
         if not research_topic or not research_topic.strip():
             raise InvalidResearchTopicError("Research Topic must not be empty.")
 
+        support_levels = [405.0, 390.0]
+        resistance_levels = [430.0, 445.0]
+        moving_averages = {"50-day": 410.5, "200-day": 395.2}
+        rsi = 58.4
+
         return TechnicalAnalysisResult(
             current_price=418.65,
-            support_levels=[405.0, 390.0],
-            resistance_levels=[430.0, 445.0],
+            support_levels=support_levels,
+            resistance_levels=resistance_levels,
             trend="Bullish",
-            moving_averages={"50-day": 410.5, "200-day": 395.2},
-            rsi=58.4,
+            moving_averages=moving_averages,
+            rsi=rsi,
             macd="MACD line above signal line, bullish momentum.",
             volume_analysis="Traded volume above its 30-day average.",
             pattern="Ascending triangle (placeholder)",
@@ -71,7 +80,23 @@ class TechnicalAnalysisCollector(BaseCollector):
                 "Technical Analysis Collector's data contract; not the "
                 "result of live research."
             ),
+            chart_data=self._build_chart_data(moving_averages, support_levels, resistance_levels),
+            chart_type="Candlestick",
+            indicators_available=[*moving_averages.keys(), "RSI", "MACD"],
             sources=["Technical Market Data Sources (placeholder)"],
             collection_time=datetime.now(),
             collector_status=CollectorStatus.SUCCESS,
+        )
+
+    @staticmethod
+    def _build_chart_data(moving_averages, support_levels, resistance_levels) -> TechnicalChartData:
+        """Reshape this collector's own indicator values into a
+        chart-ready Technical Chart Data, per IMP-09D -- reporting the
+        same gathered facts in a chart-friendly layout, not generating
+        a chart itself."""
+        return TechnicalChartData(
+            indicator_labels=list(moving_averages.keys()),
+            indicator_values=list(moving_averages.values()),
+            support_levels=list(support_levels),
+            resistance_levels=list(resistance_levels),
         )

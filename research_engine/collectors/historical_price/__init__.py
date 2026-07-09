@@ -10,12 +10,18 @@ from .historical_price_collector import (
     HistoricalPriceCollector,
     InvalidResearchTopicError,
 )
-from .historical_price_result import CollectorStatus, HistoricalPriceResult, OHLCRecord
+from .historical_price_result import (
+    ChartDataset,
+    CollectorStatus,
+    HistoricalPriceResult,
+    OHLCRecord,
+)
 
 __all__ = [
     "HistoricalPriceCollector",
     "HistoricalPriceResult",
     "OHLCRecord",
+    "ChartDataset",
     "CollectorStatus",
     "InvalidResearchTopicError",
 ]

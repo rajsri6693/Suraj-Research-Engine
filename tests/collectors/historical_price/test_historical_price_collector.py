@@ -12,6 +12,7 @@ from research_engine.collectors.historical_price.historical_price_collector impo
     InvalidResearchTopicError,
 )
 from research_engine.collectors.historical_price.historical_price_result import (
+    ChartDataset,
     CollectorStatus,
     HistoricalPriceResult,
     OHLCRecord,
@@ -99,6 +100,39 @@ class TestReturnedStructureValidity(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertIsNot(first.ohlc_records, second.ohlc_records)
         self.assertIsNot(first.sources, second.sources)
+
+    def test_chart_dataset_is_a_chart_dataset_instance(self):
+        self.assertIsInstance(self.result.chart_dataset, ChartDataset)
+
+    def test_chart_dataset_value_lists_match_ohlc_record_count(self):
+        record_count = len(self.result.ohlc_records)
+        dataset = self.result.chart_dataset
+        for values in (
+            dataset.labels,
+            dataset.open_values,
+            dataset.high_values,
+            dataset.low_values,
+            dataset.close_values,
+            dataset.volume_values,
+        ):
+            self.assertIsInstance(values, list)
+            self.assertEqual(len(values), record_count)
+
+    def test_chart_dataset_values_correspond_to_ohlc_records_in_order(self):
+        dataset = self.result.chart_dataset
+        for index, record in enumerate(self.result.ohlc_records):
+            self.assertEqual(dataset.labels[index], record.date.strftime("%Y-%m-%d"))
+            self.assertEqual(dataset.open_values[index], record.open)
+            self.assertEqual(dataset.high_values[index], record.high)
+            self.assertEqual(dataset.low_values[index], record.low)
+            self.assertEqual(dataset.close_values[index], record.close)
+            self.assertEqual(dataset.volume_values[index], record.volume)
+
+    def test_each_call_returns_an_independent_chart_dataset(self):
+        first = HistoricalPriceCollector().collect("Topic A")
+        second = HistoricalPriceCollector().collect("Topic B")
+        self.assertIsNot(first.chart_dataset, second.chart_dataset)
+        self.assertIsNot(first.chart_dataset.labels, second.chart_dataset.labels)
 
 
 class TestInvalidTopicHandling(unittest.TestCase):

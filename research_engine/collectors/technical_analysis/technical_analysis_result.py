@@ -31,9 +31,24 @@ class CollectorStatus(Enum):
 
 
 @dataclass
+class TechnicalChartData:
+    """A chart-ready technical indicator series, derived from this
+    result's own indicator values, per IMP-09D. indicator_labels holds
+    one label per value in indicator_values, in the same order -- a
+    plain, library-agnostic shape any charting consumer can plot
+    without this collector ever rendering an image itself."""
+
+    indicator_labels: List[str]
+    indicator_values: List[float]
+    support_levels: List[float]
+    resistance_levels: List[float]
+
+
+@dataclass
 class TechnicalAnalysisResult:
     """The Technical Analysis Collector's Collected Data for one
-    company, per IMP-08E's field list.
+    company, per IMP-08E's field list, extended with Chart Data, Chart
+    Type, and Indicators Available per IMP-09D.
 
     moving_averages maps a label (for example "50-day", "200-day") to
     its computed value, since more than one moving average is normally
@@ -50,6 +65,9 @@ class TechnicalAnalysisResult:
     volume_analysis: str
     pattern: str
     technical_summary: str
+    chart_data: TechnicalChartData
+    chart_type: str
+    indicators_available: List[str]
     sources: List[str]
     collection_time: datetime
     collector_status: CollectorStatus

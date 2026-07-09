@@ -94,7 +94,9 @@ class ResearchPlan:
     Every field here is required — a ResearchPlan is never partially
     constructed. depth_reason and priority_reason capture the "why it was
     chosen" text RESEARCH_PLANNER.md requires the plan to state alongside
-    Research Depth and Research Priority.
+    Research Depth and Research Priority. chart_required records whether
+    the Research Topic asked for a chart, per IMP-09D — detected from the
+    topic's own wording, independent of Research Category or Depth.
     """
 
     research_id: str
@@ -109,6 +111,7 @@ class ResearchPlan:
     collector_mode: CollectorMode
     planner_status: PlannerStatus
     created_time: datetime
+    chart_required: bool
 
     def to_human_readable(self) -> str:
         """Render this plan in the plain-language form shown in
@@ -127,6 +130,7 @@ class ResearchPlan:
             f"Priority: {self.research_priority.value}\n"
             f"Reason: {self.priority_reason}\n\n"
             f"Required Knowledge Sections:\n{sections_text}\n\n"
+            f"Chart Required: {'Yes' if self.chart_required else 'No'}\n\n"
             f"Research Mode: {self.collector_mode.value} Collectors\n"
             "Each section above is assigned to its own collector task. All\n"
             "collector tasks run concurrently; none depends on another's result.\n\n"

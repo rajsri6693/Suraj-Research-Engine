@@ -194,6 +194,59 @@ class TestDetermineResearchPriority(unittest.TestCase):
         self.assertIn("just announced", reason)
 
 
+class TestDetermineChartRequired(unittest.TestCase):
+    def setUp(self):
+        self.planner = ResearchPlanner()
+
+    def test_topic_without_chart_keyword_is_false(self):
+        self.assertFalse(self.planner.determine_chart_required("BEL"))
+
+    def test_bare_chart_keyword_is_true(self):
+        self.assertTrue(self.planner.determine_chart_required("BEL chart"))
+
+    def test_with_chart_is_true(self):
+        self.assertTrue(self.planner.determine_chart_required("BEL with chart"))
+
+    def test_analysis_with_chart_is_true(self):
+        self.assertTrue(self.planner.determine_chart_required("BEL analysis with chart"))
+
+    def test_comparison_with_chart_is_true(self):
+        self.assertTrue(self.planner.determine_chart_required("BEL vs HAL with chart"))
+
+    def test_price_chart_is_true(self):
+        self.assertTrue(self.planner.determine_chart_required("Show the price chart."))
+
+    def test_technical_chart_is_true(self):
+        self.assertTrue(self.planner.determine_chart_required("Give the technical chart."))
+
+    def test_candlestick_chart_is_true(self):
+        self.assertTrue(
+            self.planner.determine_chart_required("Show the candlestick chart.")
+        )
+
+    def test_detection_is_case_insensitive(self):
+        self.assertTrue(self.planner.determine_chart_required("BEL CHART"))
+
+    def test_word_boundary_avoids_false_positive_on_unrelated_words(self):
+        self.assertFalse(self.planner.determine_chart_required("The charter was renewed."))
+
+    def test_create_research_plan_sets_chart_required_true(self):
+        plan = self.planner.create_research_plan(
+            research_profile="BEL",
+            research_category=ResearchCategory.STOCK_UPDATE,
+            research_topic="BEL chart",
+        )
+        self.assertTrue(plan.chart_required)
+
+    def test_create_research_plan_sets_chart_required_false(self):
+        plan = self.planner.create_research_plan(
+            research_profile="BEL",
+            research_category=ResearchCategory.STOCK_UPDATE,
+            research_topic="BEL",
+        )
+        self.assertFalse(plan.chart_required)
+
+
 class TestDetermineRequiredKnowledgeSections(unittest.TestCase):
     def setUp(self):
         self.planner = ResearchPlanner()
@@ -392,14 +445,14 @@ class TestPlannerHasNoForeignDependencies(unittest.TestCase):
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 if node.level == 0 and not node.module.startswith(
-                    ("dataclasses", "datetime", "enum", "typing", "__future__")
+                    ("dataclasses", "datetime", "enum", "typing", "re", "__future__")
                 ):
                     self.fail(f"Unexpected absolute import: {node.module}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     self.assertIn(
                         alias.name.split(".")[0],
-                        {"dataclasses", "datetime", "enum", "typing"},
+                        {"dataclasses", "datetime", "enum", "typing", "re"},
                     )
 
 

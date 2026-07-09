@@ -25,7 +25,12 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..base_collector import BaseCollector
-from .historical_price_result import CollectorStatus, HistoricalPriceResult, OHLCRecord
+from .historical_price_result import (
+    ChartDataset,
+    CollectorStatus,
+    HistoricalPriceResult,
+    OHLCRecord,
+)
 
 
 class InvalidResearchTopicError(Exception):
@@ -92,7 +97,22 @@ class HistoricalPriceCollector(BaseCollector):
             ohlc_records=ohlc_records,
             total_trading_days=len(ohlc_records),
             adjusted_prices=True,
+            chart_dataset=self._build_chart_dataset(ohlc_records),
             sources=["Market Data Providers (placeholder)"],
             collection_time=datetime.now(),
             collector_status=CollectorStatus.SUCCESS,
+        )
+
+    @staticmethod
+    def _build_chart_dataset(ohlc_records) -> ChartDataset:
+        """Reshape this collector's own OHLC Records into a chart-ready
+        Chart Dataset, per IMP-09D -- reporting the same gathered facts
+        in a chart-friendly layout, not generating a chart itself."""
+        return ChartDataset(
+            labels=[record.date.strftime("%Y-%m-%d") for record in ohlc_records],
+            open_values=[record.open for record in ohlc_records],
+            high_values=[record.high for record in ohlc_records],
+            low_values=[record.low for record in ohlc_records],
+            close_values=[record.close for record in ohlc_records],
+            volume_values=[record.volume for record in ohlc_records],
         )

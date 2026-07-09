@@ -33,6 +33,7 @@ def make_plan(**overrides) -> ResearchPlan:
         collector_mode=CollectorMode.PARALLEL,
         planner_status=PlannerStatus.CREATED,
         created_time=datetime(2026, 7, 9, 9, 0, 0),
+        chart_required=False,
     )
     defaults.update(overrides)
     return ResearchPlan(**defaults)
@@ -79,8 +80,14 @@ class TestResearchPlanHumanReadable(unittest.TestCase):
         self.assertIn("Tied to an imminent event.", rendered)
         self.assertIn("Company Information", rendered)
         self.assertIn("Financial Information", rendered)
+        self.assertIn("Chart Required: No", rendered)
         self.assertIn("Parallel Collectors", rendered)
         self.assertIn("End of Plan.", rendered)
+
+    def test_chart_required_true_renders_yes(self):
+        plan = make_plan(chart_required=True)
+        rendered = plan.to_human_readable()
+        self.assertIn("Chart Required: Yes", rendered)
 
     def test_joins_multiple_profile_identifiers(self):
         plan = make_plan(

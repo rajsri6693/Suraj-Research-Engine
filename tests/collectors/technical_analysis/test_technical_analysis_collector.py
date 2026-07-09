@@ -14,6 +14,7 @@ from research_engine.collectors.technical_analysis.technical_analysis_collector 
 from research_engine.collectors.technical_analysis.technical_analysis_result import (
     CollectorStatus,
     TechnicalAnalysisResult,
+    TechnicalChartData,
 )
 
 
@@ -99,6 +100,43 @@ class TestReturnedStructureValidity(unittest.TestCase):
         self.assertIsNot(first.support_levels, second.support_levels)
         self.assertIsNot(first.moving_averages, second.moving_averages)
         self.assertIsNot(first.sources, second.sources)
+
+    def test_chart_data_is_a_technical_chart_data_instance(self):
+        self.assertIsInstance(self.result.chart_data, TechnicalChartData)
+
+    def test_chart_data_indicator_lists_match_and_derive_from_moving_averages(self):
+        chart_data = self.result.chart_data
+        self.assertIsInstance(chart_data.indicator_labels, list)
+        self.assertIsInstance(chart_data.indicator_values, list)
+        self.assertEqual(len(chart_data.indicator_labels), len(chart_data.indicator_values))
+        self.assertEqual(
+            chart_data.indicator_labels, list(self.result.moving_averages.keys())
+        )
+        self.assertEqual(
+            chart_data.indicator_values, list(self.result.moving_averages.values())
+        )
+
+    def test_chart_data_support_and_resistance_match_result_levels(self):
+        chart_data = self.result.chart_data
+        self.assertEqual(chart_data.support_levels, self.result.support_levels)
+        self.assertEqual(chart_data.resistance_levels, self.result.resistance_levels)
+
+    def test_chart_type_is_a_non_empty_string(self):
+        self.assertIsInstance(self.result.chart_type, str)
+        self.assertTrue(self.result.chart_type.strip())
+
+    def test_indicators_available_is_a_non_empty_list_of_strings(self):
+        self.assertIsInstance(self.result.indicators_available, list)
+        self.assertTrue(len(self.result.indicators_available) > 0)
+        self.assertTrue(
+            all(isinstance(indicator, str) for indicator in self.result.indicators_available)
+        )
+
+    def test_each_call_returns_an_independent_chart_data(self):
+        first = TechnicalAnalysisCollector().collect("Topic A")
+        second = TechnicalAnalysisCollector().collect("Topic B")
+        self.assertIsNot(first.chart_data, second.chart_data)
+        self.assertIsNot(first.indicators_available, second.indicators_available)
 
 
 class TestInvalidTopicHandling(unittest.TestCase):

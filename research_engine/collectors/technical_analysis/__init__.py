@@ -10,11 +10,16 @@ from .technical_analysis_collector import (
     InvalidResearchTopicError,
     TechnicalAnalysisCollector,
 )
-from .technical_analysis_result import CollectorStatus, TechnicalAnalysisResult
+from .technical_analysis_result import (
+    CollectorStatus,
+    TechnicalAnalysisResult,
+    TechnicalChartData,
+)
 
 __all__ = [
     "TechnicalAnalysisCollector",
     "TechnicalAnalysisResult",
+    "TechnicalChartData",
     "CollectorStatus",
     "InvalidResearchTopicError",
 ]

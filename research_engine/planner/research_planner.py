@@ -14,6 +14,7 @@ module — only the Python standard library.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -84,6 +85,13 @@ _DEEP_SIGNAL_PHRASES: Tuple[str, ...] = (
 # Research Topic wording that signals urgency, per RESEARCH_PLANNER.md
 # Section 6. Raises priority to High; never lowers it.
 _URGENCY_SIGNAL_PHRASES: Tuple[str, ...] = ("today", "breaking", "just announced")
+
+# Chart Required detection, per IMP-09D. Every documented example keyword
+# ("chart", "with chart", "price chart", "technical chart", "candlestick
+# chart") contains the word "chart" itself, so a single whole-word match
+# on "chart"/"charts" covers all of them -- and any natural variation a
+# user might phrase similarly -- without a brittle literal-phrase list.
+_CHART_KEYWORD_PATTERN = re.compile(r"\bcharts?\b", re.IGNORECASE)
 
 # Required Knowledge Sections per Research Category, per
 # RESEARCH_PLANNER.md Section 5 (Knowledge Selection Rules). This table
@@ -183,6 +191,7 @@ class ResearchPlanner:
             category, profile
         )
         collector_mode = self.determine_collector_mode()
+        chart_required = self.determine_chart_required(research_topic)
 
         self._sequence += 1
         return ResearchPlan(
@@ -198,6 +207,7 @@ class ResearchPlanner:
             collector_mode=collector_mode,
             planner_status=PlannerStatus.CREATED,
             created_time=datetime.now(),
+            chart_required=chart_required,
         )
 
     def determine_research_depth(
@@ -283,6 +293,17 @@ class ResearchPlanner:
         """
         del research_profile  # Unused by today's category-only selection rules.
         return list(_REQUIRED_SECTIONS_BY_CATEGORY[research_category])
+
+    def determine_chart_required(self, research_topic: str) -> bool:
+        """Determine Chart Required, per IMP-09D.
+
+        True whenever the Research Topic's own wording asks for a chart
+        -- "chart", "with chart", "price chart", "technical chart",
+        "candlestick chart", or any similar phrasing containing the word
+        "chart"/"charts". Detection is topic-only, independent of
+        Research Category or Research Depth.
+        """
+        return bool(_CHART_KEYWORD_PATTERN.search(research_topic))
 
     def determine_collector_mode(self) -> CollectorMode:
         """Determine Collector Mode.
