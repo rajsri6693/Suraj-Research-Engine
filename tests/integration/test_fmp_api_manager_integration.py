@@ -175,25 +175,17 @@ class TestFailoverFromRealFMPToPlaceholderFinnhub(unittest.TestCase):
 
 
 class TestOtherCategoriesUntouched(unittest.TestCase):
-    """VERIFY items 3-5: only Fundamental Data collectors were
-    updated; Market & Technical and News collectors are byte-identical
-    to before this phase and have no APIManager wiring at all."""
+    """VERIFY items 3-5, as of IMP-10C: only Fundamental Data collectors
+    were updated by *this* phase; News collectors are byte-identical to
+    before IMP-10C and have no APIManager wiring at all.
 
-    def test_historical_price_collector_has_no_api_manager_parameter(self):
-        from research_engine.collectors.historical_price.historical_price_collector import (
-            HistoricalPriceCollector,
-        )
-
-        collector = HistoricalPriceCollector()
-        self.assertFalse(hasattr(collector, "api_manager"))
-
-    def test_technical_analysis_collector_has_no_api_manager_parameter(self):
-        from research_engine.collectors.technical_analysis.technical_analysis_collector import (
-            TechnicalAnalysisCollector,
-        )
-
-        collector = TechnicalAnalysisCollector()
-        self.assertFalse(hasattr(collector, "api_manager"))
+    historical_price and technical_analysis are deliberately NOT
+    asserted parameter-free here any more -- IMP-10D
+    (Claude-Prompts/IMP_10D_Alpha_Vantage_Integration.md) correctly
+    wires an api_manager parameter into both, since they are exactly
+    the Market & Technical collectors that phase is scoped to update.
+    Their own dedicated coverage lives in
+    test_alpha_vantage_api_manager_integration.py."""
 
     def test_market_news_collector_has_no_api_manager_parameter(self):
         from research_engine.collectors.market_news.market_news_collector import (

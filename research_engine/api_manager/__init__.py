@@ -12,11 +12,12 @@ IMP-10B implemented the complete API infrastructure -- selection,
 failover, health tracking, logging, status aggregation, configuration
 loading, and five placeholder Provider Interface adapters -- with no
 live HTTP call anywhere in the package. Per
-Claude-Prompts/IMP_10C_FMP_Integration.md, FMP is now a real, live-HTTP
-adapter; every other provider (Finnhub, Alpha Vantage, Twelve Data,
+Claude-Prompts/IMP_10C_FMP_Integration.md and
+IMP_10D_Alpha_Vantage_Integration.md, FMP and Alpha Vantage are now
+real, live-HTTP adapters; every other provider (Finnhub, Twelve Data,
 NewsAPI) remains an IMP-10B placeholder, and this package's own
 selection/failover/health/logging logic (this file's exports below) is
-unchanged by that integration. See providers/ for all five adapters,
+unchanged by either integration. See providers/ for all five adapters,
 and research_database/api_manager_schema.py plus
 research_database/repositories/api_*_repository.py for the SQLite
 configuration layer.

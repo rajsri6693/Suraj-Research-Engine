@@ -7,13 +7,37 @@ project_documentation/COLLECTOR_SOURCE_STRATEGY.md. It is responsible
 ONLY for collecting the Technical Analysis Knowledge Section and
 returning a TechnicalAnalysisResult.
 
-This phase does NOT perform live research. collect() returns a valid
-TechnicalAnalysisResult built from placeholder/mock values only -- the
-goal is to validate the Collector architecture and the Technical
-Analysis data contract, not external data retrieval. It NEVER calls an
-API, accesses the internet, verifies data, approves data, accesses a
-database, writes SQLite, generates scripts or videos, or calls any other
-collector.
+Per Claude-Prompts/IMP_10D_Alpha_Vantage_Integration.md, this collector
+may optionally be given an APIManager (research_engine/api_manager/)
+for Market & Technical Category requests -- RSI is Primary Provider
+Alpha Vantage's operation for this section, per
+API_MANAGER_ARCHITECTURE.md Section 2/3 (this collector requests
+"RSI"). Without an APIManager (the default), collect() returns the
+same placeholder/mock TechnicalAnalysisResult as every prior phase, so
+every existing caller and test is unaffected. When one is given,
+collect() requests through it exclusively -- it NEVER calls Alpha
+Vantage, Twelve Data, or any provider directly, per IMP-10D's
+Collectors rule.
+
+When Alpha Vantage itself serves the request with at least one real
+RSI value, collect() maps the most recent value onto
+TechnicalAnalysisResult.rsi and rebuilds chart_data's indicator series
+from the real RSI time series (dates as labels, RSI values). The
+remaining fields (support_levels, resistance_levels, trend,
+moving_averages, macd, volume_analysis, pattern, technical_summary)
+come from separate Alpha Vantage operations (SMA/EMA/MACD, not called
+by this collector) or are not derivable from RSI data at all, so they
+are deliberately left as placeholder values rather than fabricated --
+combining multiple Alpha Vantage operations into one collector call is
+future work outside this phase's scope. When the Backup Provider
+(Twelve Data, still a placeholder) serves the request instead, or
+Alpha Vantage returns no data for the symbol, every field keeps its
+placeholder value and only Sources/Collector Status reflect the real
+outcome.
+
+It NEVER accesses the internet itself, verifies data, approves data,
+accesses a database, writes SQLite, generates scripts or videos, or
+calls any other collector.
 
 Preferred Source Category: Technical Market Data Sources. Fallback
 Category: Market Data Providers, per COLLECTOR_SOURCE_STRATEGY.md's
@@ -23,7 +47,9 @@ Collector Mapping (Section 4).
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 
+from ...api_manager import APIManager, Category, ProviderName
 from ..base_collector import BaseCollector
 from .technical_analysis_result import (
     CollectorStatus,
@@ -40,6 +66,11 @@ class InvalidResearchTopicError(Exception):
 class TechnicalAnalysisCollector(BaseCollector):
     """Collects the Technical Analysis Knowledge Section."""
 
+    AV_OPERATION = "RSI"
+
+    def __init__(self, api_manager: Optional[APIManager] = None) -> None:
+        self.api_manager = api_manager
+
     @property
     def collector_name(self) -> str:
         return "Technical Analysis Collector"
@@ -53,9 +84,10 @@ class TechnicalAnalysisCollector(BaseCollector):
 
         Input: Research Topic. Output: a TechnicalAnalysisResult.
 
-        This phase returns placeholder/mock values only -- no live
-        research, no API call, no internet access. It validates the
-        collector's interface and data contract, not real collection.
+        Without an APIManager, returns placeholder/mock values only, as
+        every prior phase did. With one, requests through it
+        exclusively and reflects the real outcome onto the same
+        placeholder shape -- see this module's docstring.
         """
         if not research_topic or not research_topic.strip():
             raise InvalidResearchTopicError("Research Topic must not be empty.")
@@ -65,7 +97,7 @@ class TechnicalAnalysisCollector(BaseCollector):
         moving_averages = {"50-day": 410.5, "200-day": 395.2}
         rsi = 58.4
 
-        return TechnicalAnalysisResult(
+        result = TechnicalAnalysisResult(
             current_price=418.65,
             support_levels=support_levels,
             resistance_levels=resistance_levels,
@@ -87,6 +119,63 @@ class TechnicalAnalysisCollector(BaseCollector):
             collection_time=datetime.now(),
             collector_status=CollectorStatus.SUCCESS,
         )
+
+        if self.api_manager is None:
+            return result
+
+        api_result = self.api_manager.request(
+            Category.MARKET_TECHNICAL,
+            self.AV_OPERATION,
+            {"symbol": research_topic},
+            collector_name=self.collector_name,
+        )
+        rsi_series = self._alpha_vantage_rsi_series(api_result)
+
+        if api_result.success and (rsi_series is not None or api_result.provider_name != ProviderName.ALPHA_VANTAGE):
+            result.sources = [f"{api_result.provider_name.value} ({api_result.served_by.value})"]
+            result.collector_status = CollectorStatus.SUCCESS
+            if rsi_series is not None:
+                dates_newest_first = sorted(rsi_series.keys(), reverse=True)
+                result.rsi = rsi_series[dates_newest_first[0]]
+                dates_oldest_first = list(reversed(dates_newest_first))
+                result.chart_data = TechnicalChartData(
+                    indicator_labels=dates_oldest_first,
+                    indicator_values=[rsi_series[date] for date in dates_oldest_first],
+                    support_levels=list(support_levels),
+                    resistance_levels=list(resistance_levels),
+                )
+                result.indicators_available = ["RSI"]
+        else:
+            # Either the API call itself failed, or Alpha Vantage
+            # succeeded but returned no data for this symbol -- either
+            # way, no real Collected Data exists for this section, per
+            # COLLECTOR_SOURCE_STRATEGY.md's Missing Source Rules.
+            result.sources = []
+            result.collector_status = CollectorStatus.FAILED
+
+        return result
+
+    @staticmethod
+    def _alpha_vantage_rsi_series(api_result) -> Optional[dict]:
+        """Parse Alpha Vantage's live "Technical Analysis: RSI"
+        response (date -> {"RSI": value}, value as a string) into a
+        plain {date_str: float} mapping -- or None if this result did
+        not come from Alpha Vantage, or it returned no series data."""
+        if not api_result.success or api_result.provider_name != ProviderName.ALPHA_VANTAGE:
+            return None
+        if not isinstance(api_result.data, dict):
+            return None
+        series = api_result.data.get("series")
+        if not isinstance(series, dict) or not series:
+            return None
+
+        parsed = {}
+        for date_str, values in series.items():
+            try:
+                parsed[date_str] = float(values["RSI"])
+            except (KeyError, ValueError, TypeError):
+                continue
+        return parsed or None
 
     @staticmethod
     def _build_chart_data(moving_averages, support_levels, resistance_levels) -> TechnicalChartData:

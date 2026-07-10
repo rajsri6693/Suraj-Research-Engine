@@ -3,12 +3,13 @@ Provider Interface Adapters
 
 Public entry point for the five Provider Interface adapters, per
 project_documentation/API_MANAGER_ARCHITECTURE.md Section 2 and
-Section 5.8. Per Claude-Prompts/IMP_10C_FMP_Integration.md, FMP is now
-a real, live-HTTP adapter (resolving its key from FMP_API_KEY in
-.env); Finnhub, Alpha Vantage, Twelve Data, and NewsAPI remain the
-IMP-10B placeholders -- none of those four make an HTTP request, touch
-the network, or return live data. See each adapter's own module
-docstring for its exact scope.
+Section 5.8. Per Claude-Prompts/IMP_10C_FMP_Integration.md and
+IMP_10D_Alpha_Vantage_Integration.md, FMP and Alpha Vantage are now
+real, live-HTTP adapters (resolving their keys from FMP_API_KEY and
+ALPHA_VANTAGE_API_KEY in .env, respectively); Finnhub, Twelve Data, and
+NewsAPI remain the IMP-10B placeholders -- none of those three make an
+HTTP request, touch the network, or return live data. See each
+adapter's own module docstring for its exact scope.
 """
 
 from __future__ import annotations
@@ -27,9 +28,10 @@ from .twelve_data_provider import TwelveDataProvider
 def default_placeholder_adapters() -> Dict[ProviderName, ProviderInterface]:
     """One adapter instance per provider (five total, matching Section
     2) -- what APIManager wires itself to by default when no adapters
-    are explicitly injected. FMP is real; the other four remain
-    IMP-10B placeholders. Kept under its original name for backward
-    compatibility with every existing IMP-10B caller and test."""
+    are explicitly injected. FMP and Alpha Vantage are real; the other
+    three remain IMP-10B placeholders. Kept under its original name for
+    backward compatibility with every existing IMP-10B caller and
+    test."""
     return {
         ProviderName.FMP: FMPProvider(),
         ProviderName.FINNHUB: FinnhubProvider(),

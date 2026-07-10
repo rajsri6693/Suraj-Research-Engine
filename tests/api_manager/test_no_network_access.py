@@ -11,12 +11,14 @@ and every still-placeholder provider adapter make no HTTP request,
 touch no network, and have no dependency on the database or an AI
 provider.
 
-Per Claude-Prompts/IMP_10C_FMP_Integration.md, FMP alone is now a real,
-live-HTTP adapter -- fmp_provider.py is the one deliberate, narrowly
-scoped exception to this boundary, verified separately below by
-test_fmp_provider_is_the_only_module_using_the_network_allowlist. Every
-other module in this package, including the four remaining placeholder
-providers (Finnhub, Alpha Vantage, Twelve Data, NewsAPI), is still held
+Per Claude-Prompts/IMP_10C_FMP_Integration.md and
+IMP_10D_Alpha_Vantage_Integration.md, FMP and Alpha Vantage are each
+now real, live-HTTP adapters -- LIVE_PROVIDER_MODULE_NAMES below are
+the only deliberate, narrowly scoped exceptions to this boundary,
+verified separately by
+test_live_providers_are_the_only_modules_using_the_network_allowlist.
+Every other module in this package, including the remaining
+placeholder providers (Finnhub, Twelve Data, NewsAPI), is still held
 to the original zero-network standard.
 """
 
@@ -35,9 +37,15 @@ ALLOWED_STDLIB = {
     "typing",
 }
 
-# fmp_provider.py's additional, narrowly scoped allowance -- HTTP
-# client and response-parsing modules only, still standard library.
-FMP_NETWORK_ALLOWLIST = ALLOWED_STDLIB | {"json", "urllib.error", "urllib.parse", "urllib.request"}
+# Every live-HTTP provider's additional, narrowly scoped allowance --
+# HTTP client and response-parsing modules only, still standard
+# library.
+LIVE_PROVIDER_NETWORK_ALLOWLIST = ALLOWED_STDLIB | {
+    "json",
+    "urllib.error",
+    "urllib.parse",
+    "urllib.request",
+}
 
 FORBIDDEN_MODULES = {
     "http",
@@ -54,7 +62,10 @@ FORBIDDEN_MODULES = {
     "anthropic",
 }
 
-FMP_PROVIDER_MODULE_NAME = "fmp_provider.py"
+# Providers implemented live so far -- FMP (IMP-10C), Alpha Vantage
+# (IMP-10D). Add a new name here only when a provider is deliberately
+# promoted from placeholder to live, per that phase's own prompt.
+LIVE_PROVIDER_MODULE_NAMES = {"fmp_provider.py", "alpha_vantage_provider.py"}
 
 
 def _package_dir() -> pathlib.Path:
@@ -86,8 +97,8 @@ class TestNoNetworkOrDatabaseAccess(unittest.TestCase):
 
         for module_path in module_paths:
             allowlist = (
-                FMP_NETWORK_ALLOWLIST
-                if module_path.name == FMP_PROVIDER_MODULE_NAME
+                LIVE_PROVIDER_NETWORK_ALLOWLIST
+                if module_path.name in LIVE_PROVIDER_MODULE_NAMES
                 else ALLOWED_STDLIB
             )
             for name in _imported_names(module_path):
@@ -100,55 +111,53 @@ class TestNoNetworkOrDatabaseAccess(unittest.TestCase):
                     f"{module_path}: unexpected import '{name}'",
                 )
 
-    def test_fmp_provider_is_the_only_module_using_the_network_allowlist(self):
-        """Every module except fmp_provider.py must be satisfiable by
+    def test_live_providers_are_the_only_modules_using_the_network_allowlist(self):
+        """Every module except the live providers must be satisfiable by
         the strict, network-free allowlist alone -- proving the live-
-        HTTP exception is exactly one file wide, per
-        IMP_10C_FMP_Integration.md's 'Only FMP is implemented' scope."""
+        HTTP exception is exactly LIVE_PROVIDER_MODULE_NAMES wide, per
+        each phase's own 'Only <Provider> is implemented' scope."""
         for module_path in _module_paths():
-            if module_path.name == FMP_PROVIDER_MODULE_NAME:
+            if module_path.name in LIVE_PROVIDER_MODULE_NAMES:
                 continue
             for name in _imported_names(module_path):
                 top = name.split(".")[0]
                 self.assertTrue(
                     name in ALLOWED_STDLIB or top in ALLOWED_STDLIB,
-                    f"{module_path}: '{name}' is only permitted in {FMP_PROVIDER_MODULE_NAME}",
+                    f"{module_path}: '{name}' is only permitted in {sorted(LIVE_PROVIDER_MODULE_NAMES)}",
                 )
 
     def test_no_module_calls_urlopen_or_socket_connect(self):
         """Belt-and-suspenders textual check in case a forbidden call is
-        reached through an already-allowed module. fmp_provider.py is
-        expected to call urlopen() -- that is its one job -- and is
+        reached through an already-allowed module. Live providers are
+        expected to call urlopen() -- that is their one job -- and are
         exempted here; every other module must still contain none of
         these snippets."""
         forbidden_snippets = ("urlopen(", "socket.socket(", "requests.get(", "requests.post(")
         for module_path in _module_paths():
-            if module_path.name == FMP_PROVIDER_MODULE_NAME:
+            if module_path.name in LIVE_PROVIDER_MODULE_NAMES:
                 continue
             source = module_path.read_text(encoding="utf-8")
             for snippet in forbidden_snippets:
                 self.assertNotIn(snippet, source, f"{module_path}: found '{snippet}'")
 
-    def test_fmp_provider_only_touches_the_network_inside_send_request(self):
-        """fmp_provider.py's urlopen() call must live inside exactly
+    def test_live_providers_only_touch_the_network_inside_send_request(self):
+        """Each live provider's urlopen() call must live inside exactly
         one method (_send_request) -- the single isolated seam every
         test in this repository replaces, per that module's own
         docstring, so no test anywhere can accidentally make a live
         call through a different code path."""
-        fmp_path = _package_dir() / "providers" / FMP_PROVIDER_MODULE_NAME
-        tree = ast.parse(fmp_path.read_text(encoding="utf-8"))
+        for module_name in sorted(LIVE_PROVIDER_MODULE_NAMES):
+            module_path = _package_dir() / "providers" / module_name
+            tree = ast.parse(module_path.read_text(encoding="utf-8"))
 
-        calling_methods = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                for inner in ast.walk(node):
-                    if (
-                        isinstance(inner, ast.Attribute)
-                        and inner.attr == "urlopen"
-                    ):
-                        calling_methods.append(node.name)
+            calling_methods = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    for inner in ast.walk(node):
+                        if isinstance(inner, ast.Attribute) and inner.attr == "urlopen":
+                            calling_methods.append(node.name)
 
-        self.assertEqual(calling_methods, ["_send_request"])
+            self.assertEqual(calling_methods, ["_send_request"], f"{module_path}")
 
 
 if __name__ == "__main__":

@@ -1,14 +1,16 @@
 """Unit/integration tests for research_engine.api_manager.api_manager.
 
 Exercises Provider Selection Logic (Section 6) and the five-step
-Failover Rules (Section 7) end to end. Finnhub, Alpha Vantage, Twelve
-Data, and NewsAPI are still IMP-10B placeholders and are driven with
-`simulate_failure` to force deterministic outcomes. FMP is now real
-(Claude-Prompts/IMP_10C_FMP_Integration.md) -- wherever this suite
-needs FMP's real Primary-path plumbing (auth, request build, response
-parse) to trivially succeed, `_mocked_fmp_provider()` below replaces
-its `_send_request` seam with a canned, in-memory response. No network
-call is made anywhere in this test module either way.
+Failover Rules (Section 7) end to end. Finnhub, Twelve Data, and
+NewsAPI are still IMP-10B placeholders and are driven with
+`simulate_failure` to force deterministic outcomes. FMP
+(Claude-Prompts/IMP_10C_FMP_Integration.md) and Alpha Vantage
+(Claude-Prompts/IMP_10D_Alpha_Vantage_Integration.md) are now real --
+wherever this suite needs one of their real Primary-path plumbing
+(auth, request build, response parse) to trivially succeed,
+`_mocked_fmp_provider()`/`_mocked_alpha_vantage_provider()` below
+replace their `_send_request` seam with a canned, in-memory response.
+No network call is made anywhere in this test module either way.
 """
 
 import unittest
@@ -28,7 +30,7 @@ from research_engine.api_manager.provider_interface import (
     ProviderRateLimitedError,
     ProviderTimeoutError,
 )
-from research_engine.api_manager.providers import FinnhubProvider, FMPProvider
+from research_engine.api_manager.providers import AlphaVantageProvider, FinnhubProvider, FMPProvider
 
 
 def _mocked_fmp_provider(**overrides) -> FMPProvider:
@@ -45,13 +47,28 @@ def _mocked_fmp_provider(**overrides) -> FMPProvider:
     return provider
 
 
+def _mocked_alpha_vantage_provider(**overrides) -> AlphaVantageProvider:
+    """An AlphaVantageProvider counterpart to _mocked_fmp_provider()."""
+    provider = AlphaVantageProvider(api_key="test-key", **overrides)
+    provider._send_request = lambda url: (  # type: ignore[method-assign]
+        200,
+        b'{"Global Quote": {"01. symbol": "AAPL", "05. price": "316.22"}}',
+    )
+    return provider
+
+
 class TestSuccessfulPrimaryPath(unittest.TestCase):
     def test_each_category_defaults_to_its_primary_provider(self):
         manager = APIManager()
         manager.adapters[ProviderName.FMP] = _mocked_fmp_provider()
+        manager.adapters[ProviderName.ALPHA_VANTAGE] = _mocked_alpha_vantage_provider()
         expectations = {
             Category.FUNDAMENTAL_DATA: (ProviderName.FMP, "Company Profile", {"symbol": "AAPL"}),
-            Category.MARKET_TECHNICAL: (ProviderName.ALPHA_VANTAGE, "Some Operation", {}),
+            Category.MARKET_TECHNICAL: (
+                ProviderName.ALPHA_VANTAGE,
+                "Real-time Price",
+                {"symbol": "AAPL"},
+            ),
             Category.NEWS: (ProviderName.NEWSAPI, "Some Operation", {}),
         }
         for category, (expected_provider, operation, parameters) in expectations.items():
@@ -62,6 +79,8 @@ class TestSuccessfulPrimaryPath(unittest.TestCase):
             self.assertEqual(result.provider_name, expected_provider)
             if expected_provider is ProviderName.FMP:
                 self.assertEqual(result.data["payload"]["symbol"], "AAPL")
+            elif expected_provider is ProviderName.ALPHA_VANTAGE:
+                self.assertEqual(result.data["series"]["01. symbol"], "AAPL")
             else:
                 self.assertTrue(result.data["placeholder"])
 
