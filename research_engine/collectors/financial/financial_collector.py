@@ -12,16 +12,27 @@ optionally be given an APIManager (research_engine/api_manager/) for
 Fundamental Data Category requests -- Financial Statements, Financial
 Ratios, Earnings, Dividend, and Stock Split are Primary Provider FMP's
 operations for this section, per API_MANAGER_ARCHITECTURE.md Section
-2/3 (this collector requests "Financial Statements"). Without an
-APIManager (the default), collect() returns the same placeholder/mock
-FinancialResult as every prior phase, so every existing caller and
-test is unaffected. When one is given, collect() requests through it
-exclusively -- it NEVER calls FMP, Finnhub, or any provider directly,
-per IMP-10C's Collectors rule -- and reflects the real call's outcome
-(Success or Failed, and the real provider that served it) onto the
-same placeholder shape. Mapping FMP's raw JSON response onto each of
-FinancialResult's individual typed fields is future work outside this
-phase's scope.
+2/3 (this collector requests "Financial Statements", i.e. FMP's
+income-statement). Without an APIManager (the default), collect()
+returns the same placeholder/mock FinancialResult as every prior
+phase, so every existing caller and test is unaffected. When one is
+given, collect() requests through it exclusively -- it NEVER calls
+FMP, Finnhub, or any provider directly, per IMP-10C's Collectors rule.
+
+When FMP itself serves the request with at least one real record,
+collect() maps the four fields FMP's income-statement actually
+carries -- revenue, net_profit (from netIncome), eps, and
+financial_year (from fiscalYear) -- confirmed live against the real
+FMP API during IMP-10C validation. book_value, pe_ratio, roe, roce,
+debt_to_equity, market_capitalization, and dividend_yield come from a
+different FMP operation (Financial Ratios / Company Profile, not
+Financial Statements) that this collector does not call, so they are
+deliberately left as placeholder values rather than fabricated --
+combining multiple FMP operations into one collector call is future
+work outside this phase's scope. When the Backup Provider (Finnhub,
+still a placeholder) serves the request instead, or FMP returns no
+record for the symbol, every field keeps its placeholder value and
+only Sources/Collector Status reflect the real outcome.
 
 It NEVER accesses the internet itself, verifies data, approves data,
 accesses a database, writes SQLite, generates scripts or videos, or
@@ -37,7 +48,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from ...api_manager import APIManager, Category
+from ...api_manager import APIManager, Category, ProviderName
 from ..base_collector import BaseCollector
 from .financial_result import CollectorStatus, FinancialResult
 
@@ -102,11 +113,46 @@ class FinancialCollector(BaseCollector):
             {"symbol": research_topic},
             collector_name=self.collector_name,
         )
-        if api_result.success:
+        record = self._fmp_record(api_result)
+
+        if api_result.success and (record is not None or api_result.provider_name != ProviderName.FMP):
             result.sources = [f"{api_result.provider_name.value} ({api_result.served_by.value})"]
             result.collector_status = CollectorStatus.SUCCESS
+            if record is not None:
+                self._apply_fmp_record(result, record)
         else:
+            # Either the API call itself failed, or FMP succeeded but
+            # returned no record for this symbol -- either way, no
+            # real Collected Data exists for this section, per
+            # COLLECTOR_SOURCE_STRATEGY.md's Missing Source Rules.
             result.sources = []
             result.collector_status = CollectorStatus.FAILED
 
         return result
+
+    @staticmethod
+    def _fmp_record(api_result) -> Optional[dict]:
+        """Extract the first record from an FMP Financial Statements
+        (income-statement) response, or None if this result did not
+        come from FMP, or FMP returned an empty payload."""
+        if not api_result.success or api_result.provider_name != ProviderName.FMP:
+            return None
+        payload = api_result.data.get("payload") if isinstance(api_result.data, dict) else None
+        if isinstance(payload, list) and payload:
+            return payload[0]
+        return None
+
+    @staticmethod
+    def _apply_fmp_record(result: FinancialResult, record: dict) -> None:
+        """Map the fields FMP's income-statement actually carries onto
+        FinancialResult, per this module's docstring. Only overwrites a
+        field when FMP actually provided a value for it."""
+        if record.get("revenue") is not None:
+            result.revenue = float(record["revenue"])
+        if record.get("netIncome") is not None:
+            result.net_profit = float(record["netIncome"])
+        if record.get("eps") is not None:
+            result.eps = float(record["eps"])
+        fiscal_year = record.get("fiscalYear")
+        if fiscal_year:
+            result.financial_year = f"FY{fiscal_year}"

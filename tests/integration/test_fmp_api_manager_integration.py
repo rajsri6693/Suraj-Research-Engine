@@ -266,10 +266,14 @@ class TestCollectorsNeverImportFMPOrNetworkDirectly(unittest.TestCase):
                         )
 
     def test_relative_api_manager_import_resolves_to_the_package_not_a_submodule(self):
-        """Every updated collector imports APIManager and Category
-        directly from the api_manager package's public surface (3 dots
-        + api_manager), never reaching into a submodule like
-        `...api_manager.providers.fmp_provider`."""
+        """Every updated collector imports from the api_manager
+        package's public surface (3 dots + api_manager), never reaching
+        into a submodule like `...api_manager.providers.fmp_provider`.
+        APIManager and Category are always required; ProviderName is
+        permitted (only Company and Financial collectors use it, to
+        recognize when a live FMP record is available to map) -- no
+        other name may be imported this way."""
+        allowed_names = {"APIManager", "Category", "ProviderName"}
         for package, filename in self.UPDATED_COLLECTOR_FILES:
             path = self._collectors_dir() / package / filename
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -287,7 +291,211 @@ class TestCollectorsNeverImportFMPOrNetworkDirectly(unittest.TestCase):
                 f"{path}: expected exactly one `from ...api_manager import ...`",
             )
             imported_names = {alias.name for alias in api_manager_imports[0].names}
-            self.assertEqual(imported_names, {"APIManager", "Category"})
+            self.assertTrue(
+                {"APIManager", "Category"}.issubset(imported_names),
+                f"{path}: missing required APIManager/Category import",
+            )
+            self.assertTrue(
+                imported_names.issubset(allowed_names),
+                f"{path}: unexpected api_manager import(s) {imported_names - allowed_names}",
+            )
+
+
+def _fmp_returning(payload_json: bytes) -> FMPProvider:
+    provider = FMPProvider(api_key="test-key")
+    provider._send_request = lambda url: (200, payload_json)  # type: ignore[method-assign]
+    return provider
+
+
+class TestDataMapsOntoResearchEngineModels(unittest.TestCase):
+    """IMP-10C's checklist item 10: real FMP data must map onto the
+    existing Result dataclasses' typed fields, not just flow through
+    as an opaque success flag."""
+
+    def test_company_profile_maps_onto_company_result(self):
+        manager = APIManager()
+        manager.adapters[ProviderName.FMP] = _fmp_returning(
+            b'[{"symbol": "INFY", "companyName": "Infosys Limited", '
+            b'"sector": "Technology", "industry": "Information Technology Services", '
+            b'"isin": "US4567881085", "website": "https://www.infosys.com", '
+            b'"description": "Infosys Limited provides consulting services.", '
+            b'"city": "Bangalore", "state": "Karnataka", "country": "IN", '
+            b'"exchange": "NSE", "price": 18.5}]'
+        )
+        collector = CompanyCollector(api_manager=manager)
+
+        result = collector.collect("INFY")
+
+        self.assertEqual(result.collector_status.value, "Success")
+        self.assertEqual(result.company_name, "Infosys Limited")
+        self.assertEqual(result.sector, "Technology")
+        self.assertEqual(result.industry, "Information Technology Services")
+        self.assertEqual(result.isin, "US4567881085")
+        self.assertEqual(result.official_website, "https://www.infosys.com")
+        self.assertEqual(
+            result.business_description, "Infosys Limited provides consulting services."
+        )
+        self.assertEqual(result.headquarters, "Bangalore, Karnataka, IN")
+        self.assertEqual(result.nse_symbol, "INFY")
+        # founded_year is deliberately NOT overwritten -- FMP has no
+        # founding-year field, only IPO date, and substituting one for
+        # the other would be a data-integrity error.
+        self.assertEqual(result.founded_year, 1998)
+
+    def test_financial_statements_maps_onto_financial_result(self):
+        manager = APIManager()
+        manager.adapters[ProviderName.FMP] = _fmp_returning(
+            b'[{"symbol": "AAPL", "revenue": 416161000000, "netIncome": 112010000000, '
+            b'"eps": 7.02, "fiscalYear": "2025"}]'
+        )
+        collector = FinancialCollector(api_manager=manager)
+
+        result = collector.collect("AAPL")
+
+        self.assertEqual(result.collector_status.value, "Success")
+        self.assertEqual(result.revenue, 416161000000.0)
+        self.assertEqual(result.net_profit, 112010000000.0)
+        self.assertEqual(result.eps, 7.02)
+        self.assertEqual(result.financial_year, "FY2025")
+        # Fields FMP's income-statement does not carry (book_value,
+        # pe_ratio, roe, roce, debt_to_equity, market_capitalization,
+        # dividend_yield) are left at their placeholder values, per
+        # this module's docstring -- never fabricated.
+        self.assertEqual(result.pe_ratio, 21.6)
+
+    def test_backup_finnhub_response_never_triggers_fmp_field_mapping(self):
+        """When Finnhub (still a placeholder) serves the request, its
+        differently-shaped response must never be misinterpreted as an
+        FMP payload."""
+        manager = APIManager()
+        manager.adapters[ProviderName.FMP] = FMPProvider(
+            simulate_failure=ProviderDownError("simulated FMP outage")
+        )
+        collector = CompanyCollector(api_manager=manager)
+
+        result = collector.collect("Sample Manufacturing Ltd (SMFG, NSE)")
+
+        self.assertEqual(result.collector_status.value, "Success")
+        self.assertEqual(result.company_name, "Sample Manufacturing Ltd")  # placeholder, untouched
+        self.assertIn("Finnhub", result.sources[0])
+
+
+class TestInvalidSymbolHandling(unittest.TestCase):
+    """FMP succeeds (HTTP 200) but returns an empty payload for a
+    symbol it has no coverage for -- confirmed live against the real
+    API for several NSE symbols during IMP-10C validation."""
+
+    def test_empty_fmp_payload_reports_collector_failed(self):
+        manager = APIManager()
+        manager.adapters[ProviderName.FMP] = _fmp_returning(b"[]")
+        collector = CompanyCollector(api_manager=manager)
+
+        result = collector.collect("NOSUCHSYMBOL")
+
+        self.assertEqual(result.collector_status.value, "Failed")
+        self.assertEqual(result.sources, [])
+
+    def test_empty_fmp_payload_still_fails_over_correctly_if_backup_also_empty(self):
+        """An empty FMP payload is not itself a provider failure -- it
+        never triggers Failover to Finnhub, since FMP's own call
+        genuinely succeeded (HTTP 200, just no data for this symbol)."""
+        manager = APIManager()
+        manager.adapters[ProviderName.FMP] = _fmp_returning(b"[]")
+        collector = CompanyCollector(api_manager=manager)
+
+        collector.collect("NOSUCHSYMBOL")
+
+        self.assertEqual(
+            manager.logger.usage_count(ProviderName.FINNHUB, Category.FUNDAMENTAL_DATA), 0
+        )
+
+
+class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
+    """Invalid API key, Timeout, and Rate Limit handling, mocked only
+    (per IMP-10C's Testing requirement), verified end to end from a
+    Collector's perspective, not just FMPProvider's."""
+
+    def test_invalid_api_key_fails_over_and_collector_still_succeeds(self):
+        from research_engine.api_manager.provider_interface import ProviderInvalidKeyError
+
+        manager = APIManager()
+        manager.adapters[ProviderName.FMP] = FMPProvider(
+            simulate_failure=ProviderInvalidKeyError("simulated invalid key")
+        )
+        collector = FinancialCollector(api_manager=manager)
+
+        result = collector.collect("AAPL")
+
+        self.assertEqual(result.collector_status.value, "Success")
+        self.assertIn("Finnhub", result.sources[0])
+        health = manager.health_tracker.get(ProviderName.FMP, Category.FUNDAMENTAL_DATA)
+        from research_engine.api_manager import HealthStatus
+
+        self.assertEqual(health.status, HealthStatus.INVALID_KEY)
+
+    def test_timeout_fails_over_and_collector_still_succeeds(self):
+        from research_engine.api_manager.provider_interface import ProviderTimeoutError
+
+        manager = APIManager()
+        manager.adapters[ProviderName.FMP] = FMPProvider(
+            simulate_failure=ProviderTimeoutError("simulated timeout")
+        )
+        collector = FinancialCollector(api_manager=manager)
+
+        result = collector.collect("AAPL")
+
+        self.assertEqual(result.collector_status.value, "Success")
+        health = manager.health_tracker.get(ProviderName.FMP, Category.FUNDAMENTAL_DATA)
+        from research_engine.api_manager import HealthStatus
+
+        self.assertEqual(health.status, HealthStatus.TIMEOUT)
+
+    def test_rate_limit_fails_over_and_collector_still_succeeds(self):
+        from research_engine.api_manager.provider_interface import ProviderRateLimitedError
+
+        manager = APIManager()
+        manager.adapters[ProviderName.FMP] = FMPProvider(
+            simulate_failure=ProviderRateLimitedError("simulated rate limit")
+        )
+        collector = FinancialCollector(api_manager=manager)
+
+        result = collector.collect("AAPL")
+
+        self.assertEqual(result.collector_status.value, "Success")
+        health = manager.health_tracker.get(ProviderName.FMP, Category.FUNDAMENTAL_DATA)
+        from research_engine.api_manager import HealthStatus
+
+        self.assertEqual(health.status, HealthStatus.RATE_LIMITED)
+
+    def test_both_fmp_and_finnhub_failing_all_four_modes(self):
+        """Belt-and-suspenders: whichever way FMP fails, if Finnhub
+        also fails, the Collector reports Failed -- never fabricated
+        data, regardless of which of the four failure modes hit FMP."""
+        from research_engine.api_manager import HealthStatus
+        from research_engine.api_manager.provider_interface import (
+            ProviderInvalidKeyError,
+            ProviderRateLimitedError,
+            ProviderTimeoutError,
+        )
+        from research_engine.api_manager.providers import FinnhubProvider
+
+        for fmp_error in (
+            ProviderDownError("down"),
+            ProviderInvalidKeyError("bad key"),
+            ProviderRateLimitedError("rate limited"),
+            ProviderTimeoutError("timed out"),
+        ):
+            manager = APIManager()
+            manager.adapters[ProviderName.FMP] = FMPProvider(simulate_failure=fmp_error)
+            manager.adapters[ProviderName.FINNHUB] = FinnhubProvider(
+                simulate_failure=ProviderDownError("backup also down")
+            )
+            collector = FinancialCollector(api_manager=manager)
+
+            result = collector.collect("AAPL")
+
+            self.assertEqual(result.collector_status.value, "Failed")
+            self.assertEqual(result.sources, [])
 
 
 if __name__ == "__main__":

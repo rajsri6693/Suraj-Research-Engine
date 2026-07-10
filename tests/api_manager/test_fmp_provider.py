@@ -108,12 +108,18 @@ class TestAPIAuthentication(unittest.TestCase):
 
 
 class TestRequestBuilder(unittest.TestCase):
-    def test_symbol_is_url_encoded_into_the_path(self):
+    def test_symbol_is_sent_as_a_query_parameter(self):
+        """FMP's current "stable" API takes `symbol` as a query
+        parameter on every operation -- confirmed via live validation
+        against the real FMP API (see fmp_provider.py's module-level
+        comment above _OPERATION_ENDPOINTS). There is no path-based
+        `{symbol}` substitution."""
         provider = _provider()
         fake = FakeSendRequest((200, b'{"symbol": "AAPL"}'))
         provider._send_request = fake
         provider.call("Company Profile", {"symbol": "AAPL"})
-        self.assertIn("/profile/AAPL", fake.calls[0])
+        self.assertIn("/stable/profile?", fake.calls[0])
+        self.assertIn("symbol=AAPL", fake.calls[0])
 
     def test_missing_symbol_raises_fmp_request_error_before_any_call(self):
         provider = _provider()
@@ -156,9 +162,9 @@ class TestRequestBuilder(unittest.TestCase):
 
     def test_financial_statements_statement_type_selects_sub_endpoint(self):
         for statement_type, expected_segment in (
-            ("income", "/income-statement/"),
-            ("balance", "/balance-sheet-statement/"),
-            ("cash", "/cash-flow-statement/"),
+            ("income", "/income-statement?"),
+            ("balance", "/balance-sheet-statement?"),
+            ("cash", "/cash-flow-statement?"),
         ):
             provider = _provider()
             fake = FakeSendRequest((200, b"[]"))
@@ -174,13 +180,21 @@ class TestRequestBuilder(unittest.TestCase):
         with self.assertRaises(FMPRequestError):
             provider.call("Financial Statements", {"symbol": "AAPL", "statement_type": "bogus"})
 
-    def test_competitors_operation_does_not_require_symbol_in_path(self):
+    def test_competitors_operation_uses_the_stock_peers_endpoint(self):
         provider = _provider()
         fake = FakeSendRequest((200, b"[]"))
         provider._send_request = fake
         provider.call("Competitors", {"symbol": "AAPL"})
-        self.assertIn("/stock-peers", fake.calls[0])
+        self.assertIn("/stock-peers?", fake.calls[0])
         self.assertIn("symbol=AAPL", fake.calls[0])
+
+    def test_competitors_without_symbol_still_raises(self):
+        """Every operation on the current stable API requires `symbol`
+        -- Competitors is no longer a path-only exception."""
+        provider = _provider()
+        provider._send_request = FakeSendRequest()
+        with self.assertRaises(FMPRequestError):
+            provider.call("Competitors", {})
 
     def test_extra_parameters_are_appended_to_the_query_string(self):
         provider = _provider()
@@ -332,7 +346,8 @@ class TestConnectionValidation(unittest.TestCase):
         provider._send_request = fake
         response = provider.call("HealthCheck", {})
         self.assertIsInstance(response, ProviderResponse)
-        self.assertIn("/profile/AAPL", fake.calls[0])
+        self.assertIn("/stable/profile?", fake.calls[0])
+        self.assertIn("symbol=AAPL", fake.calls[0])
 
     def test_health_check_fails_the_same_way_a_normal_request_would(self):
         provider = _provider()
@@ -363,6 +378,31 @@ class TestRequestLog(unittest.TestCase):
         self.assertEqual(len(provider.request_log), 1)
         self.assertEqual(provider.request_log[0].outcome, "SUCCESS")
         self.assertEqual(provider.request_log[0].status_code, 200)
+
+    def test_api_key_is_never_stored_in_the_request_log_on_success(self):
+        provider = _provider(api_key="super-secret-real-key")
+        provider._send_request = FakeSendRequest((200, b'{"symbol": "AAPL"}'))
+        provider.call("Company Profile", {"symbol": "AAPL"})
+        logged_url = provider.request_log[0].url
+        self.assertNotIn("super-secret-real-key", logged_url)
+        self.assertIn("REDACTED", logged_url)
+
+    def test_api_key_is_never_stored_in_the_request_log_on_failure(self):
+        provider = _provider(api_key="super-secret-real-key")
+        provider._send_request = FakeSendRequest(_http_error(500, "Server Error"))
+        with self.assertRaises(ProviderDownError):
+            provider.call("Company Profile", {"symbol": "AAPL"})
+        logged_url = provider.request_log[0].url
+        self.assertNotIn("super-secret-real-key", logged_url)
+
+    def test_the_real_key_is_still_used_for_the_actual_network_call(self):
+        """Redaction must only affect the logged copy -- the real
+        request sent over the wire still needs the real key."""
+        provider = _provider(api_key="super-secret-real-key")
+        fake = FakeSendRequest((200, b'{"symbol": "AAPL"}'))
+        provider._send_request = fake
+        provider.call("Company Profile", {"symbol": "AAPL"})
+        self.assertIn("apikey=super-secret-real-key", fake.calls[0])
 
     def test_each_retry_attempt_is_logged_separately(self):
         provider = _provider(max_retries=2)

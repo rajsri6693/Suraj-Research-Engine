@@ -16,11 +16,22 @@ default), collect() returns the same placeholder/mock CompanyResult as
 every prior phase, so every existing caller and test is unaffected.
 When one is given, collect() requests through it exclusively -- it
 NEVER calls FMP, Finnhub, or any provider directly, per IMP-10C's
-Collectors rule -- and reflects the real call's outcome (Success or
-Failed, and the real provider that served it) onto the same
-placeholder shape. Mapping FMP's raw JSON response onto each of
-CompanyResult's individual typed fields is future work outside this
-phase's scope.
+Collectors rule.
+
+When FMP itself serves the request with at least one real record,
+collect() maps FMP's live Company Profile fields onto CompanyResult
+(company_name, sector, industry, isin, official_website,
+business_description, headquarters, and nse_symbol/bse_symbol when the
+listing exchange is identifiable) -- confirmed live against the real
+FMP API (INFY -> "Infosys Limited") during IMP-10C validation.
+founded_year is deliberately left as-is: FMP's profile carries an IPO
+date, not an incorporation/founding date, and substituting one for the
+other would be a data-integrity error, not an improvement. When the
+Backup Provider (Finnhub, still a placeholder) serves the request
+instead, or FMP returns no record for the symbol, the existing
+placeholder field values are kept and only Sources/Collector Status
+reflect the real outcome -- there is nothing further to genuinely map
+from a placeholder response or an empty result set.
 
 It NEVER accesses the internet itself, verifies data, approves data,
 accesses a database, writes SQLite, generates scripts or videos, or
@@ -36,7 +47,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from ...api_manager import APIManager, Category
+from ...api_manager import APIManager, Category, ProviderName
 from ..base_collector import BaseCollector
 from .company_result import CollectorStatus, CompanyResult
 
@@ -104,11 +115,62 @@ class CompanyCollector(BaseCollector):
             {"symbol": research_topic},
             collector_name=self.collector_name,
         )
-        if api_result.success:
+        record = self._fmp_record(api_result)
+
+        if api_result.success and (record is not None or api_result.provider_name != ProviderName.FMP):
             result.sources = [f"{api_result.provider_name.value} ({api_result.served_by.value})"]
             result.collector_status = CollectorStatus.SUCCESS
+            if record is not None:
+                self._apply_fmp_record(result, record)
         else:
+            # Either the API call itself failed, or FMP succeeded but
+            # returned no record for this symbol -- either way, no
+            # real Collected Data exists for this section, per
+            # COLLECTOR_SOURCE_STRATEGY.md's Missing Source Rules.
             result.sources = []
             result.collector_status = CollectorStatus.FAILED
 
         return result
+
+    @staticmethod
+    def _fmp_record(api_result) -> Optional[dict]:
+        """Extract the first record from an FMP Company Profile
+        response, or None if this result did not come from FMP, or FMP
+        returned an empty payload (symbol not found)."""
+        if not api_result.success or api_result.provider_name != ProviderName.FMP:
+            return None
+        payload = api_result.data.get("payload") if isinstance(api_result.data, dict) else None
+        if isinstance(payload, list) and payload:
+            return payload[0]
+        return None
+
+    @staticmethod
+    def _apply_fmp_record(result: CompanyResult, record: dict) -> None:
+        """Map FMP's live /stable/profile fields onto CompanyResult,
+        per this module's docstring. Only overwrites a field when FMP
+        actually provided a non-empty value for it."""
+        if record.get("companyName"):
+            result.company_name = record["companyName"]
+        if record.get("sector"):
+            result.sector = record["sector"]
+        if record.get("industry"):
+            result.industry = record["industry"]
+        if record.get("isin"):
+            result.isin = record["isin"]
+        if record.get("website"):
+            result.official_website = record["website"]
+        if record.get("description"):
+            result.business_description = record["description"]
+
+        headquarters_parts = [
+            part for part in (record.get("city"), record.get("state"), record.get("country")) if part
+        ]
+        if headquarters_parts:
+            result.headquarters = ", ".join(headquarters_parts)
+
+        exchange = (record.get("exchange") or "").upper()
+        symbol = record.get("symbol")
+        if symbol and "NSE" in exchange:
+            result.nse_symbol = symbol
+        elif symbol and "BSE" in exchange:
+            result.bse_symbol = symbol

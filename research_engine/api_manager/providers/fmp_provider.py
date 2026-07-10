@@ -52,35 +52,51 @@ from ..provider_interface import (
     ProviderTimeoutError,
 )
 
-DEFAULT_BASE_URL = "https://financialmodelingprep.com/api/v3"
+DEFAULT_BASE_URL = "https://financialmodelingprep.com/stable"
 
-# Operation -> FMP endpoint path template, per IMP_10C_FMP_Integration.md's
-# Supported Data list. `{symbol}` is filled in from the request's
-# `symbol` parameter. Exactly the twelve Fundamental Data operations
-# FMP is Primary for -- no other operation is implemented in this
-# phase.
+# Operation -> FMP "stable" API path segment, per
+# IMP_10C_FMP_Integration.md's Supported Data list. Every stable-API
+# operation takes `symbol` as a query parameter (never a path
+# component) -- confirmed empirically via live validation against the
+# real FMP API on 2026-07-10 using this repository's own configured
+# key. FMP's older `/api/v3/...` path-based endpoints (e.g.
+# `/profile/{symbol}`) are now a deprecated "Legacy Endpoint" that
+# returns HTTP 403 for current-plan keys; this table intentionally
+# targets only the current, non-legacy API surface. Exactly the twelve
+# Fundamental Data operations FMP is Primary for -- no other operation
+# is implemented in this phase.
+#
+# "Shareholding" (institutional-ownership) returned HTTP 402 ("Restricted
+# Endpoint... upgrade your plan") on the key used for validation -- the
+# path is confirmed to exist and be the current, correct one; access is
+# a subscription-tier matter, not a defect in this mapping.
+# "Orders & Contracts" has no direct FMP analog; sec-filings-financials
+# is the closest available endpoint and its `symbol` filtering behavior
+# was not fully confirmed during validation -- documented as a known
+# limitation, consistent with this phase's placeholder-era honesty
+# about scope.
 _OPERATION_ENDPOINTS: Dict[str, str] = {
-    "Company Profile": "/profile/{symbol}",
-    "Financial Statements": "/income-statement/{symbol}",
-    "Financial Ratios": "/ratios/{symbol}",
-    "Earnings": "/earnings-surprises/{symbol}",
-    "Dividend": "/historical-price-full/stock_dividend/{symbol}",
-    "Stock Split": "/historical-price-full/stock_split/{symbol}",
-    "Management": "/key-executives/{symbol}",
-    "Shareholding": "/institutional-holder/{symbol}",
+    "Company Profile": "/profile",
+    "Financial Statements": "/income-statement",
+    "Financial Ratios": "/ratios",
+    "Earnings": "/earnings",
+    "Dividend": "/dividends",
+    "Stock Split": "/splits",
+    "Management": "/key-executives",
+    "Shareholding": "/institutional-ownership/symbol-positions-summary",
     "Competitors": "/stock-peers",
-    "Products & Services": "/profile/{symbol}",
-    "Corporate Actions": "/historical-price-full/stock_dividend/{symbol}",
-    "Orders & Contracts": "/sec_filings/{symbol}",
+    "Products & Services": "/profile",
+    "Corporate Actions": "/dividends",
+    "Orders & Contracts": "/sec-filings-financials",
 }
 
 # "Financial Statements" alone has a `statement_type` sub-selector
 # ("income" (default), "balance", "cash") layered on top of the table
-# above.
+# above. All three confirmed live against the current stable API.
 _FINANCIAL_STATEMENT_PATHS: Dict[str, str] = {
-    "income": "/income-statement/{symbol}",
-    "balance": "/balance-sheet-statement/{symbol}",
-    "cash": "/cash-flow-statement/{symbol}",
+    "income": "/income-statement",
+    "balance": "/balance-sheet-statement",
+    "cash": "/cash-flow-statement",
 }
 
 _INVALID_KEY_MESSAGE_MARKERS = ("invalid api key", "apikey")
@@ -210,24 +226,20 @@ class FMPProvider(ProviderInterface):
         return path
 
     def _build_url(self, operation: str, parameters: Dict[str, Any], api_key: str) -> str:
-        path_template = self._endpoint_path(operation, parameters)
+        """Every operation on FMP's current "stable" API takes `symbol`
+        as a query parameter -- confirmed live for all twelve
+        operations (see the module-level comment above
+        _OPERATION_ENDPOINTS). There is no path-based `{symbol}`
+        substitution any more."""
+        path = self._endpoint_path(operation, parameters)
+
+        symbol = parameters.get("symbol")
+        if not symbol:
+            raise FMPRequestError(f"Operation '{operation}' requires a 'symbol' parameter.")
 
         query_params = {
-            key: value
-            for key, value in parameters.items()
-            if key not in ("symbol", "statement_type")
+            key: value for key, value in parameters.items() if key != "statement_type"
         }
-
-        if "{symbol}" in path_template:
-            symbol = parameters.get("symbol")
-            if not symbol:
-                raise FMPRequestError(f"Operation '{operation}' requires a 'symbol' parameter.")
-            path = path_template.format(symbol=urllib.parse.quote(str(symbol)))
-        else:
-            path = path_template
-            if "symbol" in parameters:
-                query_params["symbol"] = parameters["symbol"]
-
         query_params["apikey"] = api_key
         query_string = urllib.parse.urlencode(query_params)
         return f"{self.base_url}{path}?{query_string}"
@@ -316,6 +328,24 @@ class FMPProvider(ProviderInterface):
     # Logging
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _redact_api_key(url: str) -> str:
+        """Replace the `apikey` query parameter's value with a fixed
+        redaction marker before a URL is ever stored or surfaced --
+        the request log exists for debugging/testing, never as a place
+        an API key could leak out to. The real, unredacted `url` is
+        used for the actual network call in _send_request(); only the
+        logged copy is ever redacted."""
+        parsed = urllib.parse.urlsplit(url)
+        query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        redacted_pairs = [
+            (key, "***REDACTED***" if key == "apikey" else value) for key, value in query_pairs
+        ]
+        redacted_query = urllib.parse.urlencode(redacted_pairs)
+        return urllib.parse.urlunsplit(
+            (parsed.scheme, parsed.netloc, parsed.path, redacted_query, parsed.fragment)
+        )
+
     def _log_attempt(
         self,
         url: str,
@@ -326,7 +356,7 @@ class FMPProvider(ProviderInterface):
     ) -> None:
         self._request_log.append(
             FMPRequestLogEntry(
-                url=url,
+                url=self._redact_api_key(url),
                 attempt=attempt,
                 status_code=status_code,
                 response_time_ms=response_time_ms,
