@@ -1,12 +1,14 @@
 """Unit tests for research_engine.api_manager.providers.
 
-Three of the five adapters (Finnhub, Twelve Data, NewsAPI) remain the
-IMP-10B placeholder: deterministic mock data, never raising unless
-`simulate_failure` is set. FMP (IMP-10C) and Alpha Vantage (IMP-10D)
-are now real, live-HTTP adapters -- their provider_name/interface-
-contract compliance is still checked generically below, but their real
-request/response/error behavior has its own dedicated suite
-(test_fmp_provider.py, test_alpha_vantage_provider.py), not here.
+Two of the five adapters (Finnhub, NewsAPI) remain the IMP-10B
+placeholder: deterministic mock data, never raising unless
+`simulate_failure` is set. FMP (IMP-10C), Alpha Vantage (IMP-10D), and
+Twelve Data (IMP-10E) are now real, live-HTTP adapters -- their
+provider_name/interface-contract compliance is still checked
+generically below, but their real request/response/error behavior has
+its own dedicated suite (test_fmp_provider.py,
+test_alpha_vantage_provider.py, test_twelve_data_provider.py), not
+here.
 """
 
 import unittest
@@ -34,13 +36,13 @@ ADAPTER_EXPECTATIONS = (
     (NewsAPIProvider, ProviderName.NEWSAPI),
 )
 
-# The three adapters still implemented as IMP-10B placeholders -- FMP
-# and Alpha Vantage are deliberately excluded, since neither returns
-# placeholder data or stays exception-free without simulate_failure any
-# more (see test_fmp_provider.py, test_alpha_vantage_provider.py).
+# The two adapters still implemented as IMP-10B placeholders -- FMP,
+# Alpha Vantage, and Twelve Data are deliberately excluded, since none
+# of the three returns placeholder data or stays exception-free
+# without simulate_failure any more (see test_fmp_provider.py,
+# test_alpha_vantage_provider.py, test_twelve_data_provider.py).
 STILL_PLACEHOLDER_ADAPTERS = (
     (FinnhubProvider, ProviderName.FINNHUB),
-    (TwelveDataProvider, ProviderName.TWELVE_DATA),
     (NewsAPIProvider, ProviderName.NEWSAPI),
 )
 
@@ -56,8 +58,8 @@ class TestEachAdapterImplementsTheContract(unittest.TestCase):
 
 
 class TestStillPlaceholderAdapters(unittest.TestCase):
-    """Finnhub, Twelve Data, NewsAPI -- unchanged from IMP-10B. FMP and
-    Alpha Vantage are intentionally not part of this suite."""
+    """Finnhub, NewsAPI -- unchanged from IMP-10B. FMP, Alpha Vantage,
+    and Twelve Data are intentionally not part of this suite."""
 
     def test_call_returns_a_provider_response_with_placeholder_data(self):
         for adapter_class, _ in STILL_PLACEHOLDER_ADAPTERS:
@@ -94,10 +96,10 @@ class TestStillPlaceholderAdapters(unittest.TestCase):
 
 
 class TestLiveProvidersSimulateFailureBackwardCompatibility(unittest.TestCase):
-    """FMPProvider and AlphaVantageProvider keep honoring
-    simulate_failure exactly as the IMP-10B placeholder did -- see each
-    module's own docstring and dedicated test file for its real
-    (non-simulated) behavior."""
+    """FMPProvider, AlphaVantageProvider, and TwelveDataProvider keep
+    honoring simulate_failure exactly as the IMP-10B placeholder did --
+    see each module's own docstring and dedicated test file for its
+    real (non-simulated) behavior."""
 
     def test_fmp_simulate_failure_raises_exactly_that_instance(self):
         error = ProviderDownError("simulated outage")
@@ -111,6 +113,13 @@ class TestLiveProvidersSimulateFailureBackwardCompatibility(unittest.TestCase):
         adapter = AlphaVantageProvider(simulate_failure=error)
         with self.assertRaises(ProviderDownError) as ctx:
             adapter.call("Real-time Price", {})
+        self.assertIs(ctx.exception, error)
+
+    def test_twelve_data_simulate_failure_raises_exactly_that_instance(self):
+        error = ProviderDownError("simulated outage")
+        adapter = TwelveDataProvider(simulate_failure=error)
+        with self.assertRaises(ProviderDownError) as ctx:
+            adapter.call("Live Price", {})
         self.assertIs(ctx.exception, error)
 
 

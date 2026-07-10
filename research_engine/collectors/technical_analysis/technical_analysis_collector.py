@@ -29,11 +29,16 @@ come from separate Alpha Vantage operations (SMA/EMA/MACD, not called
 by this collector) or are not derivable from RSI data at all, so they
 are deliberately left as placeholder values rather than fabricated --
 combining multiple Alpha Vantage operations into one collector call is
-future work outside this phase's scope. When the Backup Provider
-(Twelve Data, still a placeholder) serves the request instead, or
-Alpha Vantage returns no data for the symbol, every field keeps its
-placeholder value and only Sources/Collector Status reflect the real
-outcome.
+future work outside this phase's scope. Per
+Claude-Prompts/IMP_10E_Twelve_Data_Integration.md, this Alpha-Vantage-
+shaped mapping is intentionally NOT extended to Twelve Data (now real,
+the Backup Provider) -- failover must happen only inside APIManager,
+never inside a Collector, so this module has no Twelve Data-specific
+code at all and never will. When the Backup Provider serves the
+request instead (Twelve Data's own real response, shaped differently
+from Alpha Vantage's), or Alpha Vantage returns no data for the
+symbol, every field keeps its placeholder value and only
+Sources/Collector Status reflect the real outcome.
 
 It NEVER accesses the internet itself, verifies data, approves data,
 accesses a database, writes SQLite, generates scripts or videos, or

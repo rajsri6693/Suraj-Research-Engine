@@ -1,10 +1,18 @@
 """Integration tests for the Alpha Vantage Integration (IMP-10D): a
 Market & Technical Category Collector talking to a real (HTTP-mocked)
-APIManager wired to a real AlphaVantageProvider, with Twelve Data as
-its configured, untouched placeholder Backup.
+APIManager wired to a real AlphaVantageProvider.
 
-Every HTTP interaction is mocked at AlphaVantageProvider._send_request()
--- no test in this module ever performs a live internet call, per
+Twelve Data is also real as of IMP-10E
+(Claude-Prompts/IMP_10E_Twelve_Data_Integration.md) -- wherever this
+suite needs its Backup path to trivially succeed,
+`_td_returning()`/`_mocked_twelve_data_provider()` below replace its
+`_send_request` seam with a canned, in-memory response, the same
+pattern `_av_returning()` uses for Alpha Vantage. Twelve Data's own
+dedicated real-behavior coverage lives in
+test_twelve_data_api_manager_integration.py, not here.
+
+Every HTTP interaction is mocked at each provider's `_send_request` --
+no test in this module ever performs a live internet call, per
 Claude-Prompts/IMP_10D_Alpha_Vantage_Integration.md's Testing
 requirement.
 """
@@ -28,6 +36,7 @@ from research_engine.api_manager.provider_interface import (
     ProviderTimeoutError,
 )
 from research_engine.api_manager.providers.alpha_vantage_provider import AlphaVantageProvider
+from research_engine.api_manager.providers.twelve_data_provider import TwelveDataProvider
 from research_engine.collectors.historical_price.historical_price_collector import (
     HistoricalPriceCollector,
 )
@@ -41,6 +50,19 @@ MARKET_TECHNICAL_COLLECTOR_CLASSES = (HistoricalPriceCollector, TechnicalAnalysi
 def _av_returning(payload_json: bytes) -> AlphaVantageProvider:
     provider = AlphaVantageProvider(api_key="test-key")
     provider._send_request = lambda url: (200, payload_json)  # type: ignore[method-assign]
+    return provider
+
+
+def _mocked_twelve_data_provider(**overrides) -> TwelveDataProvider:
+    """A real TwelveDataProvider whose HTTP layer is replaced with a
+    canned success response -- used wherever this suite needs Twelve
+    Data's Backup path to trivially succeed without a live network
+    call."""
+    provider = TwelveDataProvider(api_key="test-key", **overrides)
+    provider._send_request = lambda url: (  # type: ignore[method-assign]
+        200,
+        b'{"price": "1.0"}',
+    )
     return provider
 
 
@@ -166,6 +188,7 @@ class TestDataMapsOntoResearchEngineModels(unittest.TestCase):
         manager.adapters[ProviderName.ALPHA_VANTAGE] = AlphaVantageProvider(
             simulate_failure=ProviderDownError("simulated Alpha Vantage outage")
         )
+        manager.adapters[ProviderName.TWELVE_DATA] = _mocked_twelve_data_provider()
         result = HistoricalPriceCollector(api_manager=manager).collect(
             "Sample Manufacturing Ltd (SMFG, NSE)"
         )
@@ -213,6 +236,7 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
         manager.adapters[ProviderName.ALPHA_VANTAGE] = AlphaVantageProvider(
             simulate_failure=ProviderInvalidKeyError("simulated invalid key")
         )
+        manager.adapters[ProviderName.TWELVE_DATA] = _mocked_twelve_data_provider()
         result = TechnicalAnalysisCollector(api_manager=manager).collect("AAPL")
 
         self.assertEqual(result.collector_status.value, "Success")
@@ -225,6 +249,7 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
         manager.adapters[ProviderName.ALPHA_VANTAGE] = AlphaVantageProvider(
             simulate_failure=ProviderTimeoutError("simulated timeout")
         )
+        manager.adapters[ProviderName.TWELVE_DATA] = _mocked_twelve_data_provider()
         result = TechnicalAnalysisCollector(api_manager=manager).collect("AAPL")
 
         self.assertEqual(result.collector_status.value, "Success")
@@ -236,6 +261,7 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
         manager.adapters[ProviderName.ALPHA_VANTAGE] = AlphaVantageProvider(
             simulate_failure=ProviderRateLimitedError("simulated rate limit")
         )
+        manager.adapters[ProviderName.TWELVE_DATA] = _mocked_twelve_data_provider()
         result = TechnicalAnalysisCollector(api_manager=manager).collect("AAPL")
 
         self.assertEqual(result.collector_status.value, "Success")

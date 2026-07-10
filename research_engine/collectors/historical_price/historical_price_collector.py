@@ -27,10 +27,15 @@ separate real-data chart path is needed, since Chart Dataset has always
 been derived from ohlc_records, real or placeholder alike. exchange and
 adjusted_prices are not present in Alpha Vantage's response and are
 deliberately left at their placeholder values rather than fabricated.
-When the Backup Provider (Twelve Data, still a placeholder) serves the
-request instead, or Alpha Vantage returns no records for the symbol,
-the existing placeholder field values are kept and only
-Sources/Collector Status reflect the real outcome.
+Per Claude-Prompts/IMP_10E_Twelve_Data_Integration.md, this Alpha-
+Vantage-shaped mapping is intentionally NOT extended to Twelve Data
+(now real, the Backup Provider) -- failover must happen only inside
+APIManager, never inside a Collector, so this module has no Twelve
+Data-specific code at all and never will. When the Backup Provider
+serves the request instead (Twelve Data's own real response, shaped
+differently from Alpha Vantage's), or Alpha Vantage returns no records
+for the symbol, the existing placeholder field values are kept and
+only Sources/Collector Status reflect the real outcome.
 
 It NEVER accesses the internet itself, verifies data, approves data,
 accesses a database, writes SQLite, generates scripts or videos, or

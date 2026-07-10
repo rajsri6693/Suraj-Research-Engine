@@ -373,6 +373,20 @@ class AlphaVantageProvider(ProviderInterface):
             (parsed.scheme, parsed.netloc, parsed.path, redacted_query, parsed.fragment)
         )
 
+    @staticmethod
+    def _redact_key_in_text(text: Optional[str], api_key: Optional[str]) -> Optional[str]:
+        """Strip a literal API key value out of free-text error
+        messages, not just URLs -- confirmed live during IMP-10E
+        validation that Alpha Vantage's own rate-limit message echoes
+        the caller's key back verbatim ("We have detected your API key
+        as <key> and..."). Without this, that key would flow unredacted
+        into error_message, into the ProviderCallError raised from it,
+        and into api_health.last_error. Applied to every constructed
+        message before it is ever logged or raised."""
+        if not text or not api_key:
+            return text
+        return text.replace(api_key, "***REDACTED***")
+
     def _log_attempt(
         self,
         url: str,
@@ -416,6 +430,7 @@ class AlphaVantageProvider(ProviderInterface):
             except urllib.error.HTTPError as error:
                 elapsed_ms = (time.monotonic() - started) * 1000
                 error_class, message = self._classify_http_error(error)
+                message = self._redact_key_in_text(message, api_key)
                 self._log_attempt(url, attempt, error.code, elapsed_ms, message)
                 if error_class in (ProviderInvalidKeyError, ProviderRateLimitedError):
                     raise error_class(message) from error
@@ -423,17 +438,19 @@ class AlphaVantageProvider(ProviderInterface):
             except urllib.error.URLError as error:
                 elapsed_ms = (time.monotonic() - started) * 1000
                 error_class, message = self._classify_url_error(error)
+                message = self._redact_key_in_text(message, api_key)
                 self._log_attempt(url, attempt, None, elapsed_ms, message)
                 last_retryable_error = error_class(message)
             except TimeoutError as error:
                 elapsed_ms = (time.monotonic() - started) * 1000
                 message = f"Alpha Vantage request timed out: {error}"
+                message = self._redact_key_in_text(message, api_key)
                 self._log_attempt(url, attempt, None, elapsed_ms, message)
                 last_retryable_error = ProviderTimeoutError(message)
             else:
                 elapsed_ms = (time.monotonic() - started) * 1000
                 outcome = self._handle_response(
-                    operation, function, status_code, body, url, attempt, elapsed_ms
+                    operation, function, status_code, body, url, attempt, elapsed_ms, api_key
                 )
                 if isinstance(outcome, ProviderResponse):
                     return outcome
@@ -454,11 +471,15 @@ class AlphaVantageProvider(ProviderInterface):
         url: str,
         attempt: int,
         elapsed_ms: float,
+        api_key: Optional[str] = None,
     ):
         """Returns a ProviderResponse on success, or a retryable
         ProviderCallError instance to record and possibly retry. Raises
         directly for a non-retryable in-band error (INVALID_KEY,
-        RATE_LIMITED), exactly like _request()'s HTTPError branch."""
+        RATE_LIMITED), exactly like _request()'s HTTPError branch.
+        `api_key` is used only to redact any echo of it out of an
+        in-band error message before that message is ever logged or
+        raised -- confirmed necessary live, see _redact_key_in_text."""
         try:
             payload = json.loads(body.decode("utf-8")) if body else {}
         except (ValueError, UnicodeDecodeError) as error:
@@ -469,7 +490,7 @@ class AlphaVantageProvider(ProviderInterface):
         in_band_error = self._extract_in_band_error(payload)
         if in_band_error is not None:
             error_class = self._classify_message(in_band_error)
-            message = f"Alpha Vantage error: {in_band_error}"
+            message = self._redact_key_in_text(f"Alpha Vantage error: {in_band_error}", api_key)
             self._log_attempt(url, attempt, status_code, elapsed_ms, message)
             if error_class in (ProviderInvalidKeyError, ProviderRateLimitedError):
                 raise error_class(message)
