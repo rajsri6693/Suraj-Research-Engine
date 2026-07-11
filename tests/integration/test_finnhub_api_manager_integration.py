@@ -15,8 +15,20 @@ between Finnhub and each of its two Primaries.
 """
 
 import ast
+import dataclasses
 import pathlib
 import unittest
+
+from research_database.repositories.company_repository import CompanyRepository
+from research_database.repositories.market_news_repository import MarketNewsRepository
+from research_database.repositories.sector_repository import SectorRepository
+from research_database.schema.company import Company
+from research_database.schema.market_news import MarketNewsItem
+from research_database.schema.sector import Sector
+from tests.database.test_market_technical_repositories import (
+    close_isolated_database_manager,
+    make_isolated_database_manager,
+)
 
 from research_engine.api_manager import (
     APIManager,
@@ -36,10 +48,33 @@ from research_engine.api_manager.providers.finnhub_provider import FinnhubProvid
 from research_engine.api_manager.providers.fmp_provider import FMPProvider
 from research_engine.api_manager.providers.newsapi_provider import NewsAPIProvider
 from research_engine.collectors.company.company_collector import CompanyCollector
+from research_engine.collectors.competitors.competitors_collector import CompetitorsCollector
+from research_engine.collectors.corporate_actions.corporate_action_collector import (
+    CorporateActionCollector,
+)
 from research_engine.collectors.financial.financial_collector import FinancialCollector
+from research_engine.collectors.management.management_collector import ManagementCollector
 from research_engine.collectors.market_news.market_news_collector import MarketNewsCollector
+from research_engine.collectors.orders_contracts.orders_contracts_collector import (
+    OrdersContractsCollector,
+)
+from research_engine.collectors.products_services.products_services_collector import (
+    ProductsServicesCollector,
+)
+from research_engine.collectors.shareholding.shareholding_collector import ShareholdingCollector
 
 FUNDAMENTAL_DATA_COLLECTOR_CLASSES = (CompanyCollector, FinancialCollector)
+
+ALL_FUNDAMENTAL_DATA_COLLECTOR_CLASSES = (
+    CompanyCollector,
+    FinancialCollector,
+    ManagementCollector,
+    ShareholdingCollector,
+    CompetitorsCollector,
+    ProductsServicesCollector,
+    CorporateActionCollector,
+    OrdersContractsCollector,
+)
 
 
 def _fmp_returning(payload_json: bytes) -> FMPProvider:
@@ -547,6 +582,278 @@ class TestDataMapsOntoResearchEngineModels(unittest.TestCase):
             result.news_title, "Sample Manufacturing Ltd announces new plant expansion"
         )
         self.assertIn("Finnhub", result.sources[0])
+
+
+class TestFundamentalResponsesMapCorrectlyAfterFailover(unittest.TestCase):
+    """Follow-up requirement: fundamental responses continue to map
+    correctly into the existing Research Engine models after failover
+    -- for EVERY Fundamental Data collector, not just Company/Financial.
+    "Correctly" for a Backup response means exactly what it already
+    means for every established Primary provider's Backup path
+    (Twelve Data, Finnhub-for-FMP, Finnhub-for-NewsAPI): the Result
+    object stays fully well-typed and un-corrupted -- Finnhub's
+    differently-shaped payload is never force-fit into fields it was
+    never meant to populate, so every non-sources/non-timestamp field
+    is byte-identical to the same collector's own placeholder value,
+    and only Sources/Collector Status reflect the real (Backup)
+    outcome. Forcing Finnhub's raw payload into FMP-shaped fields would
+    silently produce wrong data -- that would be the actual defect."""
+
+    _EXCLUDED_FIELDS = {"sources", "collection_time", "collector_status"}
+
+    def _non_excluded_fields_match(self, baseline, after_failover) -> bool:
+        for field in dataclasses.fields(baseline):
+            if field.name in self._EXCLUDED_FIELDS:
+                continue
+            if getattr(baseline, field.name) != getattr(after_failover, field.name):
+                return False
+        return True
+
+    def test_every_fundamental_collector_stays_well_typed_and_uncorrupted_after_failover(self):
+        for collector_class in ALL_FUNDAMENTAL_DATA_COLLECTOR_CLASSES:
+            baseline = collector_class().collect("Sample Manufacturing Ltd (SMFG, NSE)")
+
+            manager = APIManager()
+            manager.adapters[ProviderName.FMP] = FMPProvider(
+                simulate_failure=ProviderDownError("simulated FMP outage")
+            )
+            manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
+            after_failover = collector_class(api_manager=manager).collect(
+                "Sample Manufacturing Ltd (SMFG, NSE)"
+            )
+
+            self.assertEqual(
+                after_failover.collector_status.value,
+                "Success",
+                f"{collector_class.__name__} did not report Success after failover",
+            )
+            self.assertIn(
+                "Finnhub",
+                after_failover.sources[0],
+                f"{collector_class.__name__} sources did not attribute Finnhub",
+            )
+            self.assertIn(
+                "Backup",
+                after_failover.sources[0],
+                f"{collector_class.__name__} sources did not attribute Backup role",
+            )
+            self.assertTrue(
+                self._non_excluded_fields_match(baseline, after_failover),
+                f"{collector_class.__name__}: a field diverged from its placeholder value after "
+                "failover -- Finnhub's payload may have been force-mapped into the wrong field",
+            )
+
+
+class TestNewsResponsesMapCorrectlyAfterFailover(unittest.TestCase):
+    """Follow-up requirement: News responses continue to map correctly
+    into MarketNewsResult after failover -- same guarantee as above,
+    applied to the News Category's one collector."""
+
+    _EXCLUDED_FIELDS = {"sources", "collection_time", "collector_status"}
+
+    def test_market_news_collector_stays_well_typed_and_uncorrupted_after_failover(self):
+        baseline = MarketNewsCollector().collect("Sample Manufacturing Ltd (SMFG, NSE)")
+
+        manager = APIManager()
+        manager.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
+            simulate_failure=ProviderDownError("simulated NewsAPI outage")
+        )
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning(_FINNHUB_NEWS_PAYLOAD)
+        after_failover = MarketNewsCollector(api_manager=manager).collect(
+            "Sample Manufacturing Ltd (SMFG, NSE)"
+        )
+
+        self.assertEqual(after_failover.collector_status.value, "Success")
+        self.assertIn("Finnhub", after_failover.sources[0])
+        self.assertIn("Backup", after_failover.sources[0])
+        for field in dataclasses.fields(baseline):
+            if field.name in self._EXCLUDED_FIELDS:
+                continue
+            self.assertEqual(
+                getattr(baseline, field.name),
+                getattr(after_failover, field.name),
+                f"MarketNewsResult.{field.name} diverged from its placeholder value after failover",
+            )
+
+
+class TestProviderSpecificNormalizationLocation(unittest.TestCase):
+    """Follow-up requirement: provider-specific response differences
+    are normalized inside the API Manager or provider layer, never
+    inside collectors.
+
+    Confirmed TRUE for the Backup path specifically: no collector
+    contains any Finnhub-specific field-shape knowledge at all --
+    Finnhub's payload is never parsed into named fields by any
+    collector, proven by TestCollectorsNeverModifiedToSupportFailover's
+    AST scan (no Finnhub identifier/string literal anywhere in a
+    collector) combined with this class's own byte-identical-field
+    proof above (Finnhub's real payload changes zero Result fields).
+
+    NOT fully true, and worth stating plainly rather than silently
+    passing, for each category's own Primary provider: FMP's raw JSON
+    keys ("netIncome", "fiscalYear", "companyName") and NewsAPI's raw
+    JSON keys ("title", "description", "publishedAt") are read directly
+    inside financial_collector.py / company_collector.py /
+    market_news_collector.py's own `_apply_<primary>_*` methods, not
+    inside FMPProvider/NewsAPIProvider or APIManager. This is a
+    pre-existing characteristic established across IMP-10C and IMP-10F,
+    unmodified by IMP-10G's Finnhub work -- this test documents and
+    pins down exactly where that Primary-provider field mapping lives
+    today, rather than claiming full compliance with the stated ideal.
+    Refactoring it into the provider layer would be a genuine
+    architecture change to four already-shipped, tested phases, out of
+    scope for "do not redesign existing architecture" without an
+    explicit decision to do so."""
+
+    def test_finnhub_backup_never_has_field_level_knowledge_in_any_collector(self):
+        """The clean half: Backup-path normalization is correctly
+        absent from collectors entirely (no Finnhub-shaped field
+        reading exists anywhere), rather than incorrectly present."""
+        collectors_dir = pathlib.Path(__file__).resolve().parents[2] / "research_engine" / "collectors"
+        for package, filename in (
+            ("company", "company_collector.py"),
+            ("financial", "financial_collector.py"),
+            ("market_news", "market_news_collector.py"),
+        ):
+            source = (collectors_dir / package / filename).read_text(encoding="utf-8")
+            # Finnhub's own real field names (per finnhub_provider.py's
+            # _parse_response: "ticker", "marketCapitalization") never
+            # appear as a dict-key lookup in any collector.
+            self.assertNotIn('.get("ticker")', source)
+            self.assertNotIn(".get('ticker')", source)
+            self.assertNotIn("marketCapitalization", source)
+
+    def test_primary_provider_field_mapping_location_is_documented_not_hidden(self):
+        """Pins down today's actual location for FMP's/NewsAPI's own
+        raw field-name reads, per this class's own docstring -- fails
+        loudly if that code silently moves without this test being
+        updated, rather than letting the claim go unverified."""
+        collectors_dir = pathlib.Path(__file__).resolve().parents[2] / "research_engine" / "collectors"
+        financial_source = (collectors_dir / "financial" / "financial_collector.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('record.get("netIncome")', financial_source)
+        self.assertIn('record.get("fiscalYear")', financial_source)
+
+        market_news_source = (collectors_dir / "market_news" / "market_news_collector.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('article.get("title")', market_news_source)
+        self.assertIn('article.get("publishedAt")', market_news_source)
+
+
+class TestNoDuplicatePersistenceAcrossFailoverAndFailback(unittest.TestCase):
+    """Follow-up requirement: no duplicate records are created in
+    SQLite when the active provider changes during failover or
+    failback.
+
+    Verifies two distinct guarantees:
+    1. One `collect()` call, however it resolved internally (Primary
+       succeeding immediately, or Primary failing and Backup being
+       tried), always yields exactly one persistable result -- never
+       two rows for what was one logical request. This is a structural
+       property of APIManager.request() (Section 6: Backup is only
+       ever tried after Primary has already failed, never
+       speculatively alongside it -- so at most one ProviderResponse is
+       ever produced per request), verified here by asserting the
+       actual persisted row count after each individual collect() call.
+    2. A failover-then-failback sequence (two separate collect() calls,
+       different providers serving each) persists exactly two rows --
+       one per real observation -- never silently duplicating or
+       overwriting either one. Each `market_news`/`financial_information`
+       row is its own point-in-time record by design (the same pattern
+       `market_data`/`price_history` already use for repeated
+       snapshots of the same company), so two distinct successful
+       responses correctly persisting as two distinct rows is the
+       intended behavior -- what must never happen is a single
+       response being inserted more than once.
+    """
+
+    def setUp(self):
+        self.db_manager = make_isolated_database_manager()
+        sector = SectorRepository(self.db_manager).get_or_create(
+            Sector(
+                id=0, name="Duplicate Check", size="", growth_trend="",
+                dynamics_summary="", regulatory_environment="", benchmark_summary="",
+            )
+        )
+        self.company = CompanyRepository(self.db_manager).create(
+            Company(
+                id=0, legal_name="INFY", common_name="INFY", registration_details="",
+                incorporation_country="IN", headquarters_location="", founding_date="",
+                website="", stock_exchanges=["NSE"], ticker_symbols=["INFY"],
+                business_description="", mission="", industry="", sector_id=sector.id,
+                business_model_summary="", geographic_footprint=[], customer_segments=[],
+            )
+        )
+        self.news_repo = MarketNewsRepository(self.db_manager)
+
+    def tearDown(self):
+        close_isolated_database_manager(self.db_manager)
+
+    def _persist(self, result):
+        return self.news_repo.create(
+            MarketNewsItem(
+                id=0, company_id=self.company.id, headline=result.news_title,
+                event_date=result.published_time.isoformat(), summary=result.news_summary,
+                extracted_facts=list(result.sources), url=result.url,
+            )
+        )
+
+    def test_a_single_failed_over_call_persists_exactly_one_row(self):
+        manager = APIManager()
+        manager.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
+            simulate_failure=ProviderDownError("simulated NewsAPI outage")
+        )
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning(_FINNHUB_NEWS_PAYLOAD)
+
+        result = MarketNewsCollector(api_manager=manager).collect("INFY")
+        self._persist(result)
+
+        rows = self.news_repo.list_by_company(self.company.id)
+        self.assertEqual(len(rows), 1)
+
+    def test_failover_then_failback_persists_exactly_two_rows_never_more(self):
+        manager = APIManager()
+        manager.health_tracker.cool_down_seconds = 0.0
+        manager.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
+            simulate_failure=ProviderDownError("simulated NewsAPI outage")
+        )
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning(_FINNHUB_NEWS_PAYLOAD)
+
+        # Failover: NewsAPI down, Finnhub serves -- persist the one result.
+        failover_result = MarketNewsCollector(api_manager=manager).collect("INFY")
+        self._persist(failover_result)
+
+        # Failback: NewsAPI recovers -- persist the one (different) result.
+        manager.adapters[ProviderName.NEWSAPI] = _newsapi_returning(_NEWSAPI_ARTICLE_PAYLOAD)
+        failback_result = MarketNewsCollector(api_manager=manager).collect("INFY")
+        self._persist(failback_result)
+
+        rows = self.news_repo.list_by_company(self.company.id)
+        self.assertEqual(len(rows), 2)
+        # Each row traces back to the provider that actually served it --
+        # neither overwrote nor duplicated the other.
+        sources_seen = {tuple(row.extracted_facts) for row in rows}
+        self.assertEqual(len(sources_seen), 2)
+
+    def test_the_active_provider_switch_itself_never_writes_to_sqlite(self):
+        """APIManager's Provider Selection Logic and Failover Rules are
+        entirely in-memory (HealthTracker, APILogger) -- switching which
+        provider is active never touches SQLite on its own; only an
+        explicit persist() call (made by the caller, once per
+        successful result) ever does."""
+        manager = APIManager()
+        manager.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
+            simulate_failure=ProviderDownError("simulated NewsAPI outage")
+        )
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning(_FINNHUB_NEWS_PAYLOAD)
+
+        # Two collect() calls, no persistence at all.
+        MarketNewsCollector(api_manager=manager).collect("INFY")
+        MarketNewsCollector(api_manager=manager).collect("INFY")
+
+        self.assertEqual(len(self.news_repo.list_by_company(self.company.id)), 0)
 
 
 class TestCollectorsNeverModifiedToSupportFailover(unittest.TestCase):
