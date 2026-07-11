@@ -14,13 +14,11 @@ loading, and five placeholder Provider Interface adapters -- with no
 live HTTP call anywhere in the package. Per
 Claude-Prompts/IMP_10C_FMP_Integration.md,
 IMP_10D_Alpha_Vantage_Integration.md,
-IMP_10E_Twelve_Data_Integration.md, and
-IMP_10F_NewsAPI_Integration.md, FMP, Alpha Vantage, Twelve Data, and
-NewsAPI are now real, live-HTTP adapters; the remaining provider
-(Finnhub) remains an IMP-10B placeholder, and this package's own
-selection/failover/health/logging logic (this file's exports below) is
-unchanged by any of these integrations. See providers/ for all five
-adapters,
+IMP_10E_Twelve_Data_Integration.md, IMP_10F_NewsAPI_Integration.md, and
+IMP_10G_Finnhub_Integration.md, all five providers are now real,
+live-HTTP adapters, and this package's own selection/failover/health/
+logging logic (this file's exports below) is unchanged by any of these
+integrations. See providers/ for all five adapters,
 and research_database/api_manager_schema.py plus
 research_database/repositories/api_*_repository.py for the SQLite
 configuration layer.

@@ -1,18 +1,23 @@
 """Unit/integration tests for research_engine.api_manager.api_manager.
 
 Exercises Provider Selection Logic (Section 6) and the five-step
-Failover Rules (Section 7) end to end. Finnhub is still the IMP-10B
-placeholder and is driven with `simulate_failure` to force
-deterministic outcomes. FMP (Claude-Prompts/IMP_10C_FMP_Integration.md),
+Failover Rules (Section 7) end to end. All five providers are now real,
+live-HTTP adapters -- FMP (Claude-Prompts/IMP_10C_FMP_Integration.md),
 Alpha Vantage (Claude-Prompts/IMP_10D_Alpha_Vantage_Integration.md),
-Twelve Data (Claude-Prompts/IMP_10E_Twelve_Data_Integration.md), and
-NewsAPI (Claude-Prompts/IMP_10F_NewsAPI_Integration.md) are now real --
-wherever this suite needs one of their real Primary-path plumbing
-(auth, request build, response parse) to trivially succeed,
+Twelve Data (Claude-Prompts/IMP_10E_Twelve_Data_Integration.md),
+NewsAPI (Claude-Prompts/IMP_10F_NewsAPI_Integration.md), and Finnhub
+(Claude-Prompts/IMP_10G_Finnhub_Integration.md). Wherever this suite
+needs one of their real Primary-*or*-Backup-path plumbing (auth,
+request build, response parse) to trivially succeed,
 `_mocked_fmp_provider()`/`_mocked_alpha_vantage_provider()`/
-`_mocked_newsapi_provider()` below replace their `_send_request` seam
-with a canned, in-memory response. No network call is made anywhere in
-this test module either way.
+`_mocked_newsapi_provider()`/`_mocked_finnhub_provider()` below replace
+their `_send_request` seam with a canned, in-memory response. This
+matters even for tests that only assert on the Primary's own health/log
+entries -- APIManager's Failover Rules still actually call the Backup
+adapter as a side effect of `request()`, so Finnhub must be mocked
+every time a test drives FMP or NewsAPI into failing/being skipped, not
+only when the test's own assertions inspect Finnhub's result. No
+network call is made anywhere in this test module either way.
 """
 
 import unittest
@@ -72,6 +77,21 @@ def _mocked_newsapi_provider(**overrides) -> NewsAPIProvider:
     return provider
 
 
+def _mocked_finnhub_provider(**overrides) -> FinnhubProvider:
+    """A FinnhubProvider counterpart to _mocked_fmp_provider() -- used
+    every time this suite drives a Primary into failing/being skipped
+    for Fundamental Data or News, since APIManager's Failover Rules
+    then actually call Finnhub as Backup (or, after a role swap, as
+    Primary) as a real side effect of request(), not only when a
+    test's own assertions inspect its result."""
+    provider = FinnhubProvider(api_key="test-key", **overrides)
+    provider._send_request = lambda url: (  # type: ignore[method-assign]
+        200,
+        b'{"ticker": "AAPL", "name": "Apple Inc"}',
+    )
+    return provider
+
+
 class TestSuccessfulPrimaryPath(unittest.TestCase):
     def test_each_category_defaults_to_its_primary_provider(self):
         manager = APIManager()
@@ -125,8 +145,9 @@ class TestFailoverRules(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderDownError("simulated outage")
         )
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
 
-        result = manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")
+        result = manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
 
         self.assertTrue(result.success)
         self.assertEqual(result.served_by, ProviderRole.BACKUP)
@@ -137,7 +158,8 @@ class TestFailoverRules(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderDownError("simulated outage")
         )
-        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
+        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
 
         health = manager.health_tracker.get(ProviderName.FMP, Category.FUNDAMENTAL_DATA)
         self.assertEqual(health.status, HealthStatus.DOWN)
@@ -155,7 +177,8 @@ class TestFailoverRules(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderDownError("simulated outage")
         )
-        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
+        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
 
         self.assertEqual(
             manager.logger.most_recent_served_by(Category.FUNDAMENTAL_DATA), ProviderRole.BACKUP
@@ -176,7 +199,8 @@ class TestFailoverRules(unittest.TestCase):
         for error, expected_status in cases:
             manager = APIManager()
             manager.adapters[ProviderName.FMP] = FMPProvider(simulate_failure=error)
-            manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")
+            manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
+            manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
             health = manager.health_tracker.get(ProviderName.FMP, Category.FUNDAMENTAL_DATA)
             self.assertEqual(health.status, expected_status)
 
@@ -207,6 +231,7 @@ class TestFailoverRules(unittest.TestCase):
         manager2.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
             simulate_failure=ProviderDownError("down")
         )
+        manager2.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
         backup_result = manager2.request(Category.NEWS, "Company News", {"query": "AAPL"})
 
         self.assertEqual(type(primary_result), type(backup_result))
@@ -220,9 +245,12 @@ class TestCoolDownGatesRepeatedAttempts(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderDownError("down")
         )
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
 
-        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")  # marks FMP DOWN
-        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")  # should skip FMP entirely
+        # marks FMP DOWN
+        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
+        # should skip FMP entirely
+        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
 
         primary_entries = manager.logger.entries_for(
             ProviderName.FMP, Category.FUNDAMENTAL_DATA, ProviderRole.PRIMARY
@@ -235,6 +263,7 @@ class TestCoolDownGatesRepeatedAttempts(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderDownError("down")
         )
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
 
         manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
         manager.adapters[ProviderName.FMP] = _mocked_fmp_provider()  # recovers
@@ -251,10 +280,11 @@ class TestInvalidKeyRequiresManualHealthCheck(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderInvalidKeyError("bad key")
         )
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
 
-        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")
+        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
         manager.adapters[ProviderName.FMP] = FMPProvider()  # key "fixed" in adapter terms
-        result = manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")
+        result = manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
 
         # Even though the adapter would now succeed, is_usable() still
         # refuses INVALID_KEY without a manual Health Check.
@@ -265,7 +295,8 @@ class TestInvalidKeyRequiresManualHealthCheck(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderInvalidKeyError("bad key")
         )
-        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
+        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
 
         manager.adapters[ProviderName.FMP] = _mocked_fmp_provider()
         status = manager.health_check(Category.FUNDAMENTAL_DATA, ProviderRole.PRIMARY)
@@ -276,6 +307,7 @@ class TestInvalidKeyRequiresManualHealthCheck(unittest.TestCase):
 
     def test_manual_health_check_logs_an_entry(self):
         manager = APIManager()
+        manager.adapters[ProviderName.FMP] = _mocked_fmp_provider()
         manager.health_check(Category.FUNDAMENTAL_DATA, ProviderRole.PRIMARY)
         entries = manager.logger.entries_for(ProviderName.FMP, Category.FUNDAMENTAL_DATA)
         self.assertEqual(len(entries), 1)
@@ -285,8 +317,9 @@ class TestInvalidKeyRequiresManualHealthCheck(unittest.TestCase):
 class TestDisabledProviders(unittest.TestCase):
     def test_disabled_primary_skips_straight_to_backup(self):
         manager = APIManager()
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
         manager.registry.set_active(Category.FUNDAMENTAL_DATA, ProviderRole.PRIMARY, False)
-        result = manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")
+        result = manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
         self.assertTrue(result.success)
         self.assertEqual(result.served_by, ProviderRole.BACKUP)
 
@@ -316,8 +349,9 @@ class TestManualProviderSwitchAffectsSelection(unittest.TestCase):
         registry = APIRegistry()
         registry.swap_roles(Category.FUNDAMENTAL_DATA)
         manager = APIManager(registry=registry)
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
 
-        result = manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")
+        result = manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
 
         self.assertEqual(result.provider_name, ProviderName.FINNHUB)
         self.assertEqual(result.served_by, ProviderRole.PRIMARY)
@@ -328,7 +362,9 @@ class TestManualProviderSwitchAffectsSelection(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderDownError("down")
         )
-        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile")  # marks FMP DOWN as Primary
+        manager.adapters[ProviderName.FINNHUB] = _mocked_finnhub_provider()
+        # marks FMP DOWN as Primary
+        manager.request(Category.FUNDAMENTAL_DATA, "Company Profile", {"symbol": "AAPL"})
 
         registry.swap_roles(Category.FUNDAMENTAL_DATA)  # FMP is now Backup
 

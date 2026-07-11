@@ -1,12 +1,15 @@
 """Integration tests for the NewsAPI Integration (IMP-10F): the Market
 News Collector talking to a real (HTTP-mocked) APIManager wired to a
-real NewsAPIProvider. Finnhub remains the configured Backup Provider
-for News and stays a placeholder -- wherever this suite needs its
-Backup path to trivially succeed, the existing placeholder
-FinnhubProvider (deterministic mock data, or simulate_failure) is used
-directly.
+real NewsAPIProvider. Finnhub is the configured Backup Provider for
+News -- also a real, live-HTTP adapter as of
+Claude-Prompts/IMP_10G_Finnhub_Integration.md -- wherever this suite
+needs its Backup path to trivially succeed, `_finnhub_returning()`
+below replaces its `_send_request` seam with a canned, in-memory
+response, the same pattern `_newsapi_returning()` uses for NewsAPI.
+Finnhub's own dedicated real-behavior coverage lives in
+test_finnhub_api_manager_integration.py, not here.
 
-Every HTTP interaction is mocked at NewsAPIProvider's `_send_request`
+Every HTTP interaction is mocked at each provider's `_send_request`
 seam -- no test in this module ever performs a live internet call, per
 Claude-Prompts/IMP_10F_NewsAPI_Integration.md's Testing requirement.
 """
@@ -41,6 +44,16 @@ def _newsapi_returning(payload_json: bytes) -> NewsAPIProvider:
     return provider
 
 
+def _finnhub_returning(payload_json: bytes = b'{"ticker": "SMFG", "name": "Sample Manufacturing Ltd"}'):
+    """A real FinnhubProvider whose HTTP layer is replaced with a
+    canned success response -- used wherever this suite needs
+    Finnhub's Backup path to trivially succeed without a live network
+    call."""
+    provider = FinnhubProvider(api_key="test-key")
+    provider._send_request = lambda url: (200, payload_json)  # type: ignore[method-assign]
+    return provider
+
+
 _ONE_ARTICLE_PAYLOAD = (
     b'{"status": "ok", "totalResults": 1, "articles": ['
     b'{"source": {"id": null, "name": "Economic Times"}, "author": "Staff",'
@@ -68,7 +81,7 @@ _EMPTY_ARTICLES_PAYLOAD = b'{"status": "ok", "totalResults": 0, "articles": []}'
 
 class TestBackupProviderIsCorrectlyIdentified(unittest.TestCase):
     """Per IMP-10F's Objective: NewsAPI is the live Primary Provider,
-    Finnhub remains the configured Backup Provider (still a placeholder)
+    Finnhub is the configured Backup Provider (also real as of IMP-10G)
     for the News Category."""
 
     def test_newsapi_is_the_registered_primary_for_news(self):
@@ -151,7 +164,7 @@ class TestDataMapsOntoResearchEngineModels(unittest.TestCase):
         manager.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
             simulate_failure=ProviderDownError("simulated NewsAPI outage")
         )
-        manager.adapters[ProviderName.FINNHUB] = FinnhubProvider()
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
         result = MarketNewsCollector(api_manager=manager).collect(
             "Sample Manufacturing Ltd (SMFG, NSE)"
         )
@@ -292,7 +305,7 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
         manager.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
             simulate_failure=ProviderInvalidKeyError("simulated invalid key")
         )
-        manager.adapters[ProviderName.FINNHUB] = FinnhubProvider()
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
         result = MarketNewsCollector(api_manager=manager).collect("INFY")
 
         self.assertEqual(result.collector_status.value, "Success")
@@ -305,7 +318,7 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
         manager.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
             simulate_failure=ProviderTimeoutError("simulated timeout")
         )
-        manager.adapters[ProviderName.FINNHUB] = FinnhubProvider()
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
         result = MarketNewsCollector(api_manager=manager).collect("INFY")
 
         self.assertEqual(result.collector_status.value, "Success")
@@ -317,7 +330,7 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
         manager.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
             simulate_failure=ProviderRateLimitedError("simulated rate limit")
         )
-        manager.adapters[ProviderName.FINNHUB] = FinnhubProvider()
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
         result = MarketNewsCollector(api_manager=manager).collect("INFY")
 
         self.assertEqual(result.collector_status.value, "Success")

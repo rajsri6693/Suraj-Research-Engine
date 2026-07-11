@@ -1,10 +1,16 @@
 """Integration tests for the FMP Integration (IMP-10C): a Fundamental
 Data Category Collector talking to a real (HTTP-mocked) APIManager
-wired to a real FMPProvider, with Finnhub as its configured, untouched
-placeholder Backup.
+wired to a real FMPProvider. Finnhub is the configured Backup Provider
+for Fundamental Data -- also a real, live-HTTP adapter as of
+Claude-Prompts/IMP_10G_Finnhub_Integration.md -- wherever this suite
+needs its Backup path to trivially succeed, `_finnhub_returning()`
+below replaces its `_send_request` seam with a canned, in-memory
+response, the same pattern `_fmp_returning()` uses for FMP. Finnhub's
+own dedicated real-behavior coverage lives in
+test_finnhub_api_manager_integration.py, not here.
 
-Every HTTP interaction is mocked at FMPProvider._send_request() -- no
-test in this module ever performs a live internet call, per
+Every HTTP interaction is mocked at each provider's `_send_request()`
+-- no test in this module ever performs a live internet call, per
 Claude-Prompts/IMP_10C_FMP_Integration.md's Testing requirement.
 """
 
@@ -20,7 +26,18 @@ from research_engine.api_manager import (
     ProviderRole,
 )
 from research_engine.api_manager.provider_interface import ProviderDownError
+from research_engine.api_manager.providers.finnhub_provider import FinnhubProvider
 from research_engine.api_manager.providers.fmp_provider import FMPProvider
+
+
+def _finnhub_returning(payload_json: bytes = b'{"ticker": "SMFG", "name": "Sample Manufacturing Ltd"}'):
+    """A real FinnhubProvider whose HTTP layer is replaced with a
+    canned success response -- used wherever this suite needs
+    Finnhub's Backup path to trivially succeed without a live network
+    call."""
+    provider = FinnhubProvider(api_key="test-key")
+    provider._send_request = lambda url: (200, payload_json)  # type: ignore[method-assign]
+    return provider
 from research_engine.collectors.company.company_collector import CompanyCollector
 from research_engine.collectors.company.company_result import CollectorStatus
 from research_engine.collectors.competitors.competitors_collector import CompetitorsCollector
@@ -51,9 +68,12 @@ FUNDAMENTAL_DATA_COLLECTOR_CLASSES = (
 
 def _mocked_fmp_manager(**overrides) -> APIManager:
     """A real APIManager wired to a real FMPProvider whose HTTP layer
-    is a canned in-memory response -- Finnhub, Alpha Vantage, Twelve
-    Data, and NewsAPI stay exactly the IMP-10B placeholders they
-    already were. No network call is ever made."""
+    is a canned in-memory response. Finnhub is also real as of
+    IMP-10G, but every test using this helper has FMP succeed as
+    Primary, so Finnhub (still the bare default adapter) is never
+    actually invoked -- confirmed by
+    TestBackupProviderIsCorrectlyIdentified.test_finnhub_is_never_actually_called_when_fmp_succeeds.
+    No network call is ever made."""
     manager = APIManager()
     fmp = FMPProvider(api_key="test-key")
     fmp._send_request = lambda url: (  # type: ignore[method-assign]
@@ -138,15 +158,18 @@ class TestEachCollectorReachesFMPThroughAPIManager(unittest.TestCase):
 
 class TestFailoverFromRealFMPToPlaceholderFinnhub(unittest.TestCase):
     """FMP fails (mocked) -> APIManager's unchanged Failover Rules
-    (Section 7) call the still-placeholder Finnhub Backup -- proving
-    the real/placeholder boundary composes correctly through the
-    unmodified API Manager."""
+    (Section 7) call the now-also-real Finnhub Backup (HTTP mocked here
+    via `_finnhub_returning()`) -- proving the real/real boundary
+    composes correctly through the unmodified API Manager. Finnhub's
+    own dedicated real-behavior coverage lives in
+    test_finnhub_api_manager_integration.py."""
 
     def test_fmp_failure_fails_over_to_finnhub_and_collector_still_succeeds(self):
         manager = APIManager()
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderDownError("simulated FMP outage")
         )
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
         collector = CompanyCollector(api_manager=manager)
 
         result = collector.collect("Sample Manufacturing Ltd (SMFG, NSE)")
@@ -349,13 +372,13 @@ class TestDataMapsOntoResearchEngineModels(unittest.TestCase):
         self.assertEqual(result.pe_ratio, 21.6)
 
     def test_backup_finnhub_response_never_triggers_fmp_field_mapping(self):
-        """When Finnhub (still a placeholder) serves the request, its
-        differently-shaped response must never be misinterpreted as an
-        FMP payload."""
+        """When Finnhub serves the request, its differently-shaped
+        response must never be misinterpreted as an FMP payload."""
         manager = APIManager()
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderDownError("simulated FMP outage")
         )
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
         collector = CompanyCollector(api_manager=manager)
 
         result = collector.collect("Sample Manufacturing Ltd (SMFG, NSE)")
@@ -407,6 +430,7 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderInvalidKeyError("simulated invalid key")
         )
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
         collector = FinancialCollector(api_manager=manager)
 
         result = collector.collect("AAPL")
@@ -425,6 +449,7 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderTimeoutError("simulated timeout")
         )
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
         collector = FinancialCollector(api_manager=manager)
 
         result = collector.collect("AAPL")
@@ -442,6 +467,7 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
         manager.adapters[ProviderName.FMP] = FMPProvider(
             simulate_failure=ProviderRateLimitedError("simulated rate limit")
         )
+        manager.adapters[ProviderName.FINNHUB] = _finnhub_returning()
         collector = FinancialCollector(api_manager=manager)
 
         result = collector.collect("AAPL")
