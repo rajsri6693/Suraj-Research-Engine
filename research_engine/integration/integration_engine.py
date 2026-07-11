@@ -144,18 +144,38 @@ class IntegrationEngine:
     into one pipeline run.
 
     Owns one SessionManager, one CollectorRegistry (pre-populated with
-    every known real collector), and one CollectorFactory across
-    however many times run() is called; a fresh ResearchWorkflow is
-    created for each run, since a workflow tracks exactly one Research
-    Session's pass, per RESEARCH_WORKFLOW.md.
+    every known real collector unless `registry`/`factory` override it),
+    and one CollectorFactory across however many times run() is called;
+    a fresh ResearchWorkflow is created for each run, since a workflow
+    tracks exactly one Research Session's pass, per RESEARCH_WORKFLOW.md.
+
+    `registry` and `factory` are optional, additive constructor
+    parameters -- every existing caller that constructs
+    `IntegrationEngine()` with no arguments keeps building the exact
+    same zero-arg, placeholder-only collectors as before, unchanged.
+    They exist so a production runtime can inject a CollectorRegistry
+    whose collectors are bound to a live APIManager (a construction
+    detail no collector's own source, and no other part of this class,
+    needs to know about), without that runtime needing to re-implement
+    run()'s own orchestration -- see research.py at the repository
+    root. Passing `factory` alone (its own registry already built) is
+    equally valid; passing `registry` alone builds a CollectorFactory
+    from it the same way the zero-arg path already does.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        registry: Optional[CollectorRegistry] = None,
+        factory: Optional[CollectorFactory] = None,
+    ) -> None:
         self._session_manager = SessionManager()
-        self._registry = CollectorRegistry()
-        for section_name, collector_class in _KNOWN_COLLECTORS.items():
-            self._registry.register_collector(section_name, collector_class)
-        self._factory = CollectorFactory(self._registry)
+        if registry is not None:
+            self._registry = registry
+        else:
+            self._registry = CollectorRegistry()
+            for section_name, collector_class in _KNOWN_COLLECTORS.items():
+                self._registry.register_collector(section_name, collector_class)
+        self._factory = factory if factory is not None else CollectorFactory(self._registry)
         self._assembly = ResearchResultAssembly()
         self._verifier = KnowledgeVerifier()
         self._human_review = HumanReview()
@@ -280,16 +300,24 @@ class IntegrationEngine:
         Collector -> Chart Generator, per IMP-09D, when
         research_plan.chart_required is True.
 
-        Runs both collectors directly -- independent of whether their
-        Knowledge Sections are also part of required_knowledge_sections
-        -- since a chart request always needs both collectors' data
-        regardless of which Knowledge Sections this Research Plan
-        otherwise requires.
+        Both collectors now come from this engine's own CollectorFactory
+        (`self._factory.create_collector(...)`) rather than being
+        constructed directly -- with the default, zero-arg registry
+        this is byte-identical to the direct construction it replaces
+        (the same classes, the same zero constructor arguments), but it
+        additionally means a caller who injected a live-APIManager-bound
+        registry (per this class's own __init__ docstring) gets live
+        chart data too, instead of chart generation silently staying on
+        placeholder data forever regardless of that injection. Runs
+        independent of whether Historical Price/Technical Analysis are
+        also part of required_knowledge_sections -- since a chart
+        request always needs both collectors' data regardless of which
+        Knowledge Sections this Research Plan otherwise requires.
         """
-        historical_price_result = HistoricalPriceCollector().collect(
-            research_plan.research_topic
-        )
-        technical_analysis_result = TechnicalAnalysisCollector().collect(
+        historical_price_result = self._factory.create_collector(
+            "Historical Price (OHLC)"
+        ).collect(research_plan.research_topic)
+        technical_analysis_result = self._factory.create_collector("Technical Analysis").collect(
             research_plan.research_topic
         )
         return self._chart_generator.generate(

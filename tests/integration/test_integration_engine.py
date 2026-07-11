@@ -9,6 +9,9 @@ from research_engine.assembly.research_package import (
     SectionStatus,
 )
 from research_engine.chart.chart_generator import GeneratedChart
+from research_engine.collectors.collector_factory import CollectorFactory
+from research_engine.collectors.collector_registry import CollectorRegistry
+from research_engine.collectors.company.company_collector import CompanyCollector
 from research_engine.integration.integration_engine import (
     IntegrationEngine,
     IntegrationResult,
@@ -337,6 +340,109 @@ class TestChartGenerationRunsWhenRequired(unittest.TestCase):
         self.assertEqual(
             result.review_package.chart_dataset, result.generated_chart.price_dataset
         )
+
+
+class _RecordingCompanyCollector(CompanyCollector):
+    """A CompanyCollector subclass that records every call it receives
+    -- used to prove an injected registry/factory is actually the one
+    IntegrationEngine.run() (and _generate_chart) exercise, not merely
+    accepted and ignored."""
+
+    calls: list = []
+
+    def collect(self, research_topic: str):
+        _RecordingCompanyCollector.calls.append(research_topic)
+        return super().collect(research_topic)
+
+
+class TestOptionalRegistryAndFactoryInjection(unittest.TestCase):
+    """Per this class's own updated __init__ docstring: `registry` and
+    `factory` are optional, additive constructor parameters that a
+    production runtime uses to inject API-Manager-bound collectors,
+    without needing to re-implement run()'s own orchestration."""
+
+    def setUp(self):
+        _RecordingCompanyCollector.calls = []
+
+    def test_default_construction_is_unaffected(self):
+        """No behavior change whatsoever when neither argument is
+        given -- the exhaustive existing test suite above already
+        proves this; this test only pins down the zero-arg call itself
+        still succeeds."""
+        engine = IntegrationEngine()
+        result = engine.run(make_market_news_plan())
+        self.assertIsInstance(result, IntegrationResult)
+
+    def test_injected_factory_is_actually_used_for_collector_execution(self):
+        registry = CollectorRegistry()
+        registry.register_collector("Company Information", _RecordingCompanyCollector)
+        factory = CollectorFactory(registry)
+
+        engine = IntegrationEngine(factory=factory)
+        engine.run(make_market_news_plan())
+
+        self.assertEqual(len(_RecordingCompanyCollector.calls), 1)
+
+    def test_injected_registry_alone_builds_a_factory_from_it(self):
+        registry = CollectorRegistry()
+        registry.register_collector("Company Information", _RecordingCompanyCollector)
+
+        engine = IntegrationEngine(registry=registry)
+        engine.run(make_market_news_plan())
+
+        self.assertEqual(len(_RecordingCompanyCollector.calls), 1)
+
+    def test_factory_takes_precedence_when_both_are_given(self):
+        unused_registry = CollectorRegistry()  # deliberately empty/unused
+        registry = CollectorRegistry()
+        registry.register_collector("Company Information", _RecordingCompanyCollector)
+        factory = CollectorFactory(registry)
+
+        engine = IntegrationEngine(registry=unused_registry, factory=factory)
+        result = engine.run(make_market_news_plan())
+
+        self.assertEqual(len(_RecordingCompanyCollector.calls), 1)
+        self.assertIn(KnowledgeSection.COMPANY_INFORMATION, result.workflow_state.completed_collectors)
+
+    def test_injected_factory_is_also_used_for_chart_generation(self):
+        """Confirms _generate_chart's own switch to self._factory
+        actually takes effect for an injected factory too, not only
+        for the default one."""
+        registry = CollectorRegistry()
+        for section_name, collector_class in (
+            ("Company Information", CompanyCollector),
+        ):
+            registry.register_collector(section_name, collector_class)
+        from research_engine.collectors.historical_price.historical_price_collector import (
+            HistoricalPriceCollector,
+        )
+        from research_engine.collectors.technical_analysis.technical_analysis_collector import (
+            TechnicalAnalysisCollector,
+        )
+
+        calls = []
+
+        class _RecordingHistoricalPriceCollector(HistoricalPriceCollector):
+            def collect(self, research_topic: str):
+                calls.append(("historical_price", research_topic))
+                return super().collect(research_topic)
+
+        class _RecordingTechnicalAnalysisCollector(TechnicalAnalysisCollector):
+            def collect(self, research_topic: str):
+                calls.append(("technical_analysis", research_topic))
+                return super().collect(research_topic)
+
+        registry.register_collector("Historical Price (OHLC)", _RecordingHistoricalPriceCollector)
+        registry.register_collector("Technical Analysis", _RecordingTechnicalAnalysisCollector)
+        factory = CollectorFactory(registry)
+
+        engine = IntegrationEngine(factory=factory)
+        plan = make_chart_requested_plan()
+        result = engine.run(plan)
+
+        self.assertIsInstance(result.generated_chart, GeneratedChart)
+        self.assertIn(("historical_price", plan.research_topic), calls)
+        self.assertIn(("technical_analysis", plan.research_topic), calls)
 
 
 if __name__ == "__main__":
