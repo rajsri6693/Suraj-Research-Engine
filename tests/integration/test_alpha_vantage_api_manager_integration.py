@@ -270,22 +270,17 @@ class TestMockedFailureModesAtTheCollectorLevel(unittest.TestCase):
 
 
 class TestOtherCategoriesUntouched(unittest.TestCase):
-    """Only Market & Technical collectors were updated; Fundamental
-    Data and News collectors are byte-identical to before this phase."""
+    """Only Market & Technical collectors were updated in IMP-10D/10E;
+    Fundamental Data is byte-identical to before this phase. News
+    (Market News Collector) gained its own api_manager parameter in a
+    later phase, IMP-10F -- see test_newsapi_api_manager_integration.py
+    for its dedicated coverage, not here."""
 
     def test_company_collector_unaffected(self):
         from research_engine.collectors.company.company_collector import CompanyCollector
 
         collector = CompanyCollector()
         self.assertTrue(hasattr(collector, "api_manager"))  # updated in IMP-10C, not this phase
-
-    def test_market_news_collector_has_no_api_manager_parameter(self):
-        from research_engine.collectors.market_news.market_news_collector import (
-            MarketNewsCollector,
-        )
-
-        collector = MarketNewsCollector()
-        self.assertFalse(hasattr(collector, "api_manager"))
 
 
 class TestCollectorsNeverImportAlphaVantageOrNetworkDirectly(unittest.TestCase):

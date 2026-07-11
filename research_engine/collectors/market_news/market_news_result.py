@@ -11,6 +11,13 @@ Section 5's own three values exactly (Success, Partial, Failed), rather
 than imported from research_engine.assembly -- that module is outside
 IMP-08C's source of truth, and a real collector's own result package
 should be self-contained.
+
+Per Claude-Prompts/IMP_10F_NewsAPI_Integration.md's follow-up URL
+requirement, `url` was added after IMP-08C's original field list to
+carry the source article's own URL through to the persisted News
+record. It defaults to "" (rather than being required) so this remains
+a purely additive change -- any existing construction of
+MarketNewsResult that predates this field keeps working unchanged.
 """
 
 from __future__ import annotations
@@ -46,3 +53,4 @@ class MarketNewsResult:
     sources: List[str]
     collection_time: datetime
     collector_status: CollectorStatus
+    url: str = ""

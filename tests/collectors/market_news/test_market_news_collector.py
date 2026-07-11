@@ -16,6 +16,40 @@ from research_engine.collectors.market_news.market_news_result import (
 )
 
 
+class TestValidArticleUrl(unittest.TestCase):
+    """Unit coverage for MarketNewsCollector._valid_article_url --
+    preserves a valid absolute http(s) URL exactly, degrades anything
+    else to ''."""
+
+    def test_valid_https_url_preserved_exactly(self):
+        url = "https://example.com/a?x=1&y=2#frag"
+        self.assertEqual(MarketNewsCollector._valid_article_url(url), url)
+
+    def test_valid_http_url_preserved_exactly(self):
+        url = "http://example.com/a"
+        self.assertEqual(MarketNewsCollector._valid_article_url(url), url)
+
+    def test_uppercase_scheme_accepted_and_preserved_exactly(self):
+        url = "HTTPS://Example.com/A"
+        self.assertEqual(MarketNewsCollector._valid_article_url(url), url)
+
+    def test_none_degrades_to_empty_string(self):
+        self.assertEqual(MarketNewsCollector._valid_article_url(None), "")
+
+    def test_empty_string_degrades_to_empty_string(self):
+        self.assertEqual(MarketNewsCollector._valid_article_url(""), "")
+
+    def test_relative_path_degrades_to_empty_string(self):
+        self.assertEqual(MarketNewsCollector._valid_article_url("/a/b"), "")
+
+    def test_non_http_scheme_degrades_to_empty_string(self):
+        for bad in ("ftp://example.com/a", "javascript:alert(1)", "mailto:a@b.com"):
+            self.assertEqual(MarketNewsCollector._valid_article_url(bad), "")
+
+    def test_non_string_degrades_to_empty_string(self):
+        self.assertEqual(MarketNewsCollector._valid_article_url(12345), "")
+
+
 class TestCollectorCreation(unittest.TestCase):
     def test_can_be_instantiated(self):
         collector = MarketNewsCollector()
@@ -59,6 +93,10 @@ class TestReturnedStructureValidity(unittest.TestCase):
     def test_source_name_is_a_non_empty_string(self):
         self.assertIsInstance(self.result.source_name, str)
         self.assertTrue(self.result.source_name.strip())
+
+    def test_url_is_a_non_empty_string(self):
+        self.assertIsInstance(self.result.url, str)
+        self.assertTrue(self.result.url.strip())
 
     def test_published_time_is_a_datetime(self):
         self.assertIsInstance(self.result.published_time, datetime)

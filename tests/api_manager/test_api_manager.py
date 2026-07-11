@@ -1,16 +1,18 @@
 """Unit/integration tests for research_engine.api_manager.api_manager.
 
 Exercises Provider Selection Logic (Section 6) and the five-step
-Failover Rules (Section 7) end to end. Finnhub, Twelve Data, and
-NewsAPI are still IMP-10B placeholders and are driven with
-`simulate_failure` to force deterministic outcomes. FMP
-(Claude-Prompts/IMP_10C_FMP_Integration.md) and Alpha Vantage
-(Claude-Prompts/IMP_10D_Alpha_Vantage_Integration.md) are now real --
+Failover Rules (Section 7) end to end. Finnhub is still the IMP-10B
+placeholder and is driven with `simulate_failure` to force
+deterministic outcomes. FMP (Claude-Prompts/IMP_10C_FMP_Integration.md),
+Alpha Vantage (Claude-Prompts/IMP_10D_Alpha_Vantage_Integration.md),
+Twelve Data (Claude-Prompts/IMP_10E_Twelve_Data_Integration.md), and
+NewsAPI (Claude-Prompts/IMP_10F_NewsAPI_Integration.md) are now real --
 wherever this suite needs one of their real Primary-path plumbing
 (auth, request build, response parse) to trivially succeed,
-`_mocked_fmp_provider()`/`_mocked_alpha_vantage_provider()` below
-replace their `_send_request` seam with a canned, in-memory response.
-No network call is made anywhere in this test module either way.
+`_mocked_fmp_provider()`/`_mocked_alpha_vantage_provider()`/
+`_mocked_newsapi_provider()` below replace their `_send_request` seam
+with a canned, in-memory response. No network call is made anywhere in
+this test module either way.
 """
 
 import unittest
@@ -31,6 +33,7 @@ from research_engine.api_manager.provider_interface import (
     ProviderTimeoutError,
 )
 from research_engine.api_manager.providers import AlphaVantageProvider, FinnhubProvider, FMPProvider
+from research_engine.api_manager.providers.newsapi_provider import NewsAPIProvider
 
 
 def _mocked_fmp_provider(**overrides) -> FMPProvider:
@@ -57,11 +60,24 @@ def _mocked_alpha_vantage_provider(**overrides) -> AlphaVantageProvider:
     return provider
 
 
+def _mocked_newsapi_provider(**overrides) -> NewsAPIProvider:
+    """A NewsAPIProvider counterpart to _mocked_fmp_provider()."""
+    provider = NewsAPIProvider(api_key="test-key", **overrides)
+    provider._send_request = lambda url: (  # type: ignore[method-assign]
+        200,
+        b'{"status": "ok", "totalResults": 1, "articles": '
+        b'[{"source": {"name": "Reuters"}, "title": "Apple unveils new product",'
+        b' "url": "https://example.com/apple", "publishedAt": "2026-07-10T09:00:00Z"}]}',
+    )
+    return provider
+
+
 class TestSuccessfulPrimaryPath(unittest.TestCase):
     def test_each_category_defaults_to_its_primary_provider(self):
         manager = APIManager()
         manager.adapters[ProviderName.FMP] = _mocked_fmp_provider()
         manager.adapters[ProviderName.ALPHA_VANTAGE] = _mocked_alpha_vantage_provider()
+        manager.adapters[ProviderName.NEWSAPI] = _mocked_newsapi_provider()
         expectations = {
             Category.FUNDAMENTAL_DATA: (ProviderName.FMP, "Company Profile", {"symbol": "AAPL"}),
             Category.MARKET_TECHNICAL: (
@@ -69,7 +85,7 @@ class TestSuccessfulPrimaryPath(unittest.TestCase):
                 "Real-time Price",
                 {"symbol": "AAPL"},
             ),
-            Category.NEWS: (ProviderName.NEWSAPI, "Some Operation", {}),
+            Category.NEWS: (ProviderName.NEWSAPI, "Company News", {"query": "AAPL"}),
         }
         for category, (expected_provider, operation, parameters) in expectations.items():
             result = manager.request(category, operation, parameters)
@@ -82,7 +98,7 @@ class TestSuccessfulPrimaryPath(unittest.TestCase):
             elif expected_provider is ProviderName.ALPHA_VANTAGE:
                 self.assertEqual(result.data["series"]["01. symbol"], "AAPL")
             else:
-                self.assertTrue(result.data["placeholder"])
+                self.assertEqual(result.data["articles"][0]["title"], "Apple unveils new product")
 
     def test_health_is_online_after_a_successful_call(self):
         manager = APIManager()
@@ -184,13 +200,14 @@ class TestFailoverRules(unittest.TestCase):
         """A Collector's request()/result shape is identical whether
         the Primary or Backup answered -- only `served_by` differs."""
         manager = APIManager()
-        primary_result = manager.request(Category.NEWS, "Company News")
+        manager.adapters[ProviderName.NEWSAPI] = _mocked_newsapi_provider()
+        primary_result = manager.request(Category.NEWS, "Company News", {"query": "AAPL"})
 
         manager2 = APIManager()
-        manager2.adapters[ProviderName.NEWSAPI] = manager2.adapters[
-            ProviderName.NEWSAPI
-        ].__class__(simulate_failure=ProviderDownError("down"))
-        backup_result = manager2.request(Category.NEWS, "Company News")
+        manager2.adapters[ProviderName.NEWSAPI] = NewsAPIProvider(
+            simulate_failure=ProviderDownError("down")
+        )
+        backup_result = manager2.request(Category.NEWS, "Company News", {"query": "AAPL"})
 
         self.assertEqual(type(primary_result), type(backup_result))
         self.assertTrue(primary_result.success)

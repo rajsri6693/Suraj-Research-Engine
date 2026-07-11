@@ -12,15 +12,16 @@ touch no network, and have no dependency on the database or an AI
 provider.
 
 Per Claude-Prompts/IMP_10C_FMP_Integration.md,
-IMP_10D_Alpha_Vantage_Integration.md, and
-IMP_10E_Twelve_Data_Integration.md, FMP, Alpha Vantage, and Twelve Data
-are each now real, live-HTTP adapters -- LIVE_PROVIDER_MODULE_NAMES
+IMP_10D_Alpha_Vantage_Integration.md,
+IMP_10E_Twelve_Data_Integration.md, and
+IMP_10F_NewsAPI_Integration.md, FMP, Alpha Vantage, Twelve Data, and
+NewsAPI are each now real, live-HTTP adapters -- LIVE_PROVIDER_MODULE_NAMES
 below are the only deliberate, narrowly scoped exceptions to this
 boundary, verified separately by
 test_live_providers_are_the_only_modules_using_the_network_allowlist.
 Every other module in this package, including the remaining
-placeholder providers (Finnhub, NewsAPI), is still held to the
-original zero-network standard.
+placeholder provider (Finnhub), is still held to the original
+zero-network standard.
 """
 
 import ast
@@ -64,13 +65,14 @@ FORBIDDEN_MODULES = {
 }
 
 # Providers implemented live so far -- FMP (IMP-10C), Alpha Vantage
-# (IMP-10D), Twelve Data (IMP-10E). Add a new name here only when a
-# provider is deliberately promoted from placeholder to live, per that
-# phase's own prompt.
+# (IMP-10D), Twelve Data (IMP-10E), NewsAPI (IMP-10F). Add a new name
+# here only when a provider is deliberately promoted from placeholder to
+# live, per that phase's own prompt.
 LIVE_PROVIDER_MODULE_NAMES = {
     "fmp_provider.py",
     "alpha_vantage_provider.py",
     "twelve_data_provider.py",
+    "newsapi_provider.py",
 }
 
 
